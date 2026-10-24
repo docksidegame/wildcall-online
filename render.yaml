@@ -1,0 +1,16 @@
+# Render blueprint: one web service. Add DATABASE_URL (e.g. from Neon) in the dashboard.
+services:
+  - type: web
+    name: wildcall
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_USERNAMES
+        value: jeremy
+      - key: DATABASE_URL
+        sync: false
