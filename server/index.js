@@ -8,7 +8,7 @@ import {fileURLToPath} from 'url';
 import {initDb,sql} from './db.js';
 import {loadGame,econ,withSave,rules} from './game.js';
 import {initPvp,pvpOnline} from './pvp.js';
-import {getCfg,setCfg,loadCfg,DEFAULT_CFG,lockUser,loadUser,saveUser,today,publicUser,parseCookies,userFromCookie,stakeStatus,merge} from './shared.js';
+import {getCfg,setCfg,loadCfg,DEFAULT_CFG,lockUser,loadUser,saveUser,today,publicUser,parseCookies,userFromCookie,stakeStatus,merge,recordDecks} from './shared.js';
 
 const ROOT=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PORT=+process.env.PORT||3000;
@@ -112,6 +112,8 @@ app.post('/api/duel/finish',auth,async(req,res,next)=>{try{
     daily.aiCoins+=Math.max(0,dc);daily.aiPacks+=Math.max(0,dp);
     if(res2.result){res2.result.coins=Math.max(0,dc);res2.result.packs=Math.max(0,dp)}
     await sql(`update users set save=$2,daily=$3 where id=$1`,[u.id,JSON.stringify(save),JSON.stringify(daily)]);
+    const S=rules();const rv=S.RIVALS[+ri];const deck=(u.save.decks[u.save.active]||{}).cards||[];
+    if(rv&&secs>=30)recordDecks([{source:'story',user_id:u.id,won:!!(r&&r.win),went_first:r&&typeof r.first==='boolean'?r.first:null,cards:deck,turns:Math.max(0,Math.min(500,(r&&r.turns)|0))||null,rival:rv.id}]);
     return {save,result:res2.result,note}});
   res.json(out)}catch(e){next(e)}});
 
@@ -205,6 +207,19 @@ app.post('/api/admin/season/end',auth,adminOnly,async(req,res,next)=>{try{
       const nr=Math.round(1000+(u.rating-1000)/2);await sql(`update users set save=$2,rating=$3,wins=0,losses=0 where id=$1`,[u.id,JSON.stringify(u.save),nr])})}
   await sql(`insert into audit(admin_id,action,detail) values($1,'season_end',$2)`,[req.user.id,JSON.stringify({players:rows.length,paid})]);
   res.json({ok:true,players:rows.length,paid})}catch(e){next(e)}});
+// balance stats for admins
+app.get('/api/admin/stats',auth,adminOnly,async(req,res,next)=>{try{
+  const days=Math.max(0,Math.min(3650,+req.query.days||30));const src=String(req.query.src||'ranked,friendly,bot,story').split(',').filter(x=>['ranked','friendly','bot','story'].includes(x));
+  const where=`source = any($1) and ${days?`created_at > now() - interval '${days} days'`:'true'}`;
+  const p=[src];
+  const overview=await sql(`select source,count(*)::int as decks,avg(turns)::float as turns from match_decks where ${where} and bot=false group by source`,p);
+  const first=(await sql(`select count(*)::int as n,coalesce(sum(case when won then 1 else 0 end),0)::int as w from match_decks where ${where} and bot=false and went_first=true and source<>'story'`,p))[0];
+  const storyFirst=(await sql(`select count(*)::int as n,coalesce(sum(case when won then 1 else 0 end),0)::int as w from match_decks where ${where} and source='story' and went_first=true`,p))[0];
+  const totalDecks=(await sql(`select count(*)::int as n from match_decks where ${where} and bot=false`,p))[0].n;
+  const cards=await sql(`select c as card,count(*)::int as games,sum(case when won then 1 else 0 end)::int as wins from match_decks d, jsonb_array_elements_text(d.cards) c where ${where} and d.bot=false group by c order by games desc`,p);
+  const rivals=await sql(`select rival,source,count(*)::int as games,sum(case when won then 1 else 0 end)::int as wins,avg(turns)::float as turns from match_decks where ${where} and bot=false and rival is not null group by rival,source order by games desc`,p);
+  const bots=await sql(`select rival,count(*)::int as games,sum(case when won then 0 else 1 end)::int as wins from match_decks where ${where} and bot=true group by rival order by games desc`,p);
+  res.json({days,src,overview,first,storyFirst,totalDecks,cards,rivals,bots})}catch(e){next(e)}});
 app.get('/api/health',(req,res)=>res.json({ok:true,online:pvpOnline()}));
 // ---------- static game ----------
 app.use('/art',express.static(path.join(ROOT,'public/art'),{maxAge:'7d',immutable:true}));

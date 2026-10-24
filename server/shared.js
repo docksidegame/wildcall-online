@@ -21,3 +21,7 @@ export function stakeStatus(u){const st=CFG.stakes||{};const s=u.settings||{};co
   let reason=null;if(!st.enabled)reason='Stakes matches are turned off.';else if(!s.stakesOptIn)reason='Stakes matches are off. Turn them on in settings.';else if(!s.country)reason='Set your country in settings first.';
   else if((st.blocked||[]).includes(s.country))reason='Stakes matches aren\'t available in your country.';else if(used>=(st.daily||5))reason='You\'ve played today\'s staked matches.';
   return {stakesAllowed:!reason,stakesReason:reason,stakesLeft:Math.max(0,(st.daily||5)-used),country:s.country||'',stakesOptIn:!!s.stakesOptIn}}
+
+// balance stats: one row per deck per finished match
+export async function recordDecks(rows){for(const r of rows){try{const cards=[...new Set((r.cards||[]).filter(x=>typeof x==='string'))];
+  await sql(`insert into match_decks(source,user_id,bot,won,went_first,cards,turns,rival) values($1,$2,$3,$4,$5,$6,$7,$8)`,[r.source,r.user_id??null,!!r.bot,!!r.won,r.went_first??null,JSON.stringify(cards),r.turns??null,r.rival??null])}catch(e){console.error('[stats]',e.message)}}}

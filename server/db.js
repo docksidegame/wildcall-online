@@ -28,4 +28,6 @@ async function migrate(){
   await sql(`create table if not exists matches(id serial primary key, p1 int, p2 int, winner int, r1_before int, r2_before int, r1_after int, r2_after int, stake int not null default 0, turns int, reason text, created_at timestamptz not null default now())`);
   await sql(`create table if not exists audit(id serial primary key, admin_id int, action text, detail jsonb, created_at timestamptz not null default now())`);
   await sql(`create index if not exists users_rating on users(rating desc)`);
+  await sql(`create table if not exists match_decks(id serial primary key, source text not null, user_id int, bot boolean not null default false, won boolean not null, went_first boolean, cards jsonb not null, turns int, rival text, created_at timestamptz not null default now())`);
+  await sql(`create index if not exists match_decks_time on match_decks(created_at)`);
 }

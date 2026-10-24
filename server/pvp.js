@@ -3,7 +3,7 @@ import {WebSocketServer} from 'ws';
 import crypto from 'crypto';
 import {sql} from './db.js';
 import {makeRealm,rules,withSave} from './game.js';
-import {getCfg,lockUser,loadUser,saveUser,today,publicUser,userFromCookie,stakeStatus} from './shared.js';
+import {getCfg,lockUser,loadUser,saveUser,today,publicUser,userFromCookie,stakeStatus,recordDecks} from './shared.js';
 
 const socks=new Map();      // userId -> ws
 const queue=[];             // {uid,name,rating,games,deck,stake,since,sig}
@@ -92,7 +92,7 @@ async function startMatch(a,b){
     if(!await take(a)){sendU(a.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});b.since=Date.now();queue.push(b);return}
     if(!await take(b)){await refund(a);sendU(b.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});a.since=Date.now();queue.push(a);return}}
   const id=crypto.randomBytes(8).toString('hex');const realm=makeRealm();const S=realm.WCS;
-  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,bot:!!q.bot,title:q.title,away:null})),bot:!!b.bot,friendly:!!(a.friendly||b.friendly),stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
+  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,bot:!!q.bot,title:q.title,deck:q.deck,away:null})),bot:!!b.bot,friendly:!!(a.friendly||b.friendly),stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
   matches.set(id,M);M.pl.forEach(p=>{if(p.uid!=null)userMatch.set(p.uid,id)});
   const cfg=getCfg();
   const NET={server:true,
@@ -135,7 +135,7 @@ async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.
       save.coins+=coins+(won&&M.stake?M.stake*2:0);save.packs+=packs;save=withSave(save,cfg,S=>S.acts.applyPvpResult(won)).save;
       await sql(`update users set save=$2,daily=$3,rating=$4,wins=wins+$5,losses=losses+$6 where id=$1`,[u.id,JSON.stringify(save),JSON.stringify(daily),after,won?1:0,won?0:1]);
       const nu=await loadUser(u.id);return {save,coins,packs,user:publicUser(nu)}})}
-  const D=M.S.D;
+  const D=M.S.D;recordDecks(statRows(M,w,'ranked'));
   await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [M.pl[0].uid,M.pl[1].uid,W.uid,M.pl[0].rating,M.pl[1].rating,M.pl[0]===W?wAfter:lAfter,M.pl[1]===W?wAfter:lAfter,M.stake||0,D?D.turnNo:0,M.reason||reason||null]);
   M.pushNow();
@@ -149,17 +149,19 @@ async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.
 async function finishBot(M,w){const cfg=getCfg();const hi=M.pl.findIndex(p=>!p.bot);const H=M.pl[hi],B=M.pl[1-hi];const won=w===hi;
   const o=await lockUser(H.uid,async()=>{const u=await loadUser(H.uid);let save=u.save;const coins=won?(cfg.pvp.botWin??25):(cfg.pvp.botLoss??5);
     save.coins+=coins;save=withSave(save,cfg,S=>S.acts.applyPvpResult(won,true)).save;await saveUser(u.id,save);return {save,coins,user:publicUser(await loadUser(u.id))}});
-  const D=M.S.D;
+  const D=M.S.D;recordDecks(statRows(M,w,'bot'));
   await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,null,$2,$3,$3,$3,$3,0,$4,$5)`,[H.uid,won?H.uid:null,H.rating,D?D.turnNo:0,'bot:'+B.name]);
   M.pushNow();
   sendU(H.uid,{t:'over',won,bot:true,oppName:B.name+' (bot)',ratingBefore:H.rating,ratingAfter:H.rating,coins:o.coins,packs:0,stake:0,save:o.save,user:o.user,reason:M.reason||null});
   userMatch.delete(H.uid);clearTimeout(H.away);setTimeout(()=>matches.delete(M.id),5000)}
 
 // friendly match: no rating, no rewards, just recorded
-async function finishFriendly(M,w){const D=M.S.D;const W=M.pl[w];
+async function finishFriendly(M,w){const D=M.S.D;const W=M.pl[w];recordDecks(statRows(M,w,'friendly'));
   await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,$2,$3,$4,$5,$4,$5,0,$6,'friendly')`,[M.pl[0].uid,M.pl[1].uid,W.uid,M.pl[0].rating,M.pl[1].rating,D?D.turnNo:0]);
   M.pushNow();
   for(let pi=0;pi<2;pi++){const p=M.pl[pi];const won=pi===w;const u=await loadUser(p.uid);
     sendU(p.uid,{t:'over',won,friendly:true,oppName:M.pl[1-pi].name,ratingBefore:p.rating,ratingAfter:p.rating,coins:0,packs:0,stake:0,save:u.save,user:publicUser(u),reason:M.reason||null});
     userMatch.delete(p.uid);clearTimeout(p.away)}
   setTimeout(()=>matches.delete(M.id),5000)}
+
+function statRows(M,w,source){const D=M.S.D;return M.pl.map((p,pi)=>({source,user_id:p.uid,bot:p.bot,won:pi===w,went_first:D?D.first===pi:null,cards:p.deck,turns:D?D.turnNo:null,rival:p.bot?p.name:null}))}
