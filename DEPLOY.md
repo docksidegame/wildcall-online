@@ -42,3 +42,13 @@ Railway, Fly.io and any VPS work the same way: run `npm run build`, then `npm st
 ## Backups
 
 Neon keeps point-in-time history on its free tier. You can also run `pg_dump "$DATABASE_URL" > backup.sql` regularly.
+
+## Updating without kicking players out (maintenance mode)
+
+1. Open **Admin**. In the **Maintenance** panel, type a message for players (optional) and click **Start maintenance**.
+   - New ranked matches, friend challenges and story duels are paused. Players see an orange banner.
+   - Matches already running keep going and pay out normally.
+2. Wait until the panel shows **✓ Clear to update**. The game locks itself the moment the last live match ends. You can also click **Lock now** to skip the wait.
+   - Once it's locked, players see a "We'll be right back" screen. Admins can still play.
+3. Push your update. Render redeploys it. The lock is saved in the database, so the game stays locked through the restart.
+4. When the new version is live, click **End maintenance**. Players waiting on the maintenance screen get back in automatically within about 10 seconds.

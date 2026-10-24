@@ -7,8 +7,8 @@ import bcrypt from 'bcryptjs';
 import {fileURLToPath} from 'url';
 import {initDb,sql,DB_KIND} from './db.js';
 import {loadGame,econ,withSave,rules} from './game.js';
-import {initPvp,pvpOnline} from './pvp.js';
-import {getCfg,setCfg,loadCfg,DEFAULT_CFG,lockUser,loadUser,saveUser,today,publicUser,parseCookies,userFromCookie,stakeStatus,merge,recordDecks} from './shared.js';
+import {initPvp,pvpOnline,maintDashboard} from './pvp.js';
+import {getCfg,setCfg,loadCfg,DEFAULT_CFG,lockUser,loadUser,saveUser,today,publicUser,parseCookies,userFromCookie,stakeStatus,merge,recordDecks,getMaint,setMaint,loadMaint,maintPublic} from './shared.js';
 
 const ROOT=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PORT=+process.env.PORT||3000;
@@ -32,10 +32,12 @@ const bad=(res,code,msg)=>res.status(code).json({error:msg});
 
 async function auth(req,res,next){try{const u=await userFromCookie(req.headers.cookie);if(!u)return bad(res,401,'Please sign in.');req.user=u;next()}catch(e){next(e)}}
 const adminOnly=(req,res,next)=>req.user.admin?next():bad(res,403,'Admins only.');
+// while locked for maintenance, only admins can use the game API
+const live=(req,res,next)=>{const m=getMaint();if(m.state==='locked'&&!req.user.admin)return res.status(503).json({error:m.message||'Wildcall is down for maintenance. Back soon!',maintenance:true,maint:maintPublic()});next()};
 async function startSession(res,userId){const tok=crypto.randomBytes(32).toString('hex');
   await sql(`insert into sessions(token,user_id,expires) values($1,$2,now()+interval '${SESSION_DAYS} days')`,[tok,userId]);
   res.setHeader('Set-Cookie',`wc_sess=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS*86400}${PROD?'; Secure':''}`)}
-function mePayload(u){return {user:publicUser(u),save:u.save,cfg:getCfg()}}
+function mePayload(u){return {user:publicUser(u),save:u.save,cfg:getCfg(),maint:maintPublic()}}
 
 // ---------- accounts ----------
 app.post('/api/signup',async(req,res,next)=>{try{
@@ -65,7 +67,7 @@ app.get('/api/me',auth,async(req,res,next)=>{try{let u=req.user;sql(`update user
 
 // ---------- economy actions run by the real game code on the server ----------
 const ACTS=new Set(['buyItem','buyTheme','buySingle','sellExtras','claimBounty','takePack','takeAll','pickStarter']);
-app.post('/api/act',auth,async(req,res,next)=>{try{
+app.post('/api/act',auth,live,async(req,res,next)=>{try{
   const {a,args}=req.body||{};if(!ACTS.has(a))return bad(res,400,'Unknown action.');
   if(limit('act:'+req.user.id,120,60e3))return bad(res,429,'Slow down a little.');
   const out=await lockUser(req.user.id,async()=>{const u=await loadUser(req.user.id);
@@ -75,7 +77,7 @@ app.post('/api/act',auth,async(req,res,next)=>{try{
   res.json({ok:true,save:out.save,result:out.result,msg:out.msg,cfg:getCfg()})}catch(e){if(e.code)return bad(res,e.code,e.message);next(e)}});
 
 // non-economic save fields (decks, art choice, story scenes seen), validated against what the player owns
-app.post('/api/meta',auth,async(req,res,next)=>{try{
+app.post('/api/meta',auth,live,async(req,res,next)=>{try{
   const body=req.body||{};
   const out=await lockUser(req.user.id,async()=>{const u=await loadUser(req.user.id);const save=u.save;if(!save)return {save:null};
     const S=rules();const C=S.C;let fixed=false;
@@ -94,7 +96,7 @@ app.post('/api/meta',auth,async(req,res,next)=>{try{
 
 // story duels against the AI run in the browser; rewards are applied here with daily caps
 const duelTokens=new Map();
-app.post('/api/duel/start',auth,(req,res)=>{const ri=+(req.body||{}).ri;const tok=crypto.randomBytes(12).toString('hex');duelTokens.set(tok,{uid:req.user.id,ri,t:Date.now()});res.json({token:tok})});
+app.post('/api/duel/start',auth,(req,res)=>{const mt=getMaint();if(mt.state!=='live'&&!req.user.admin)return res.status(503).json({error:'Maintenance is starting, so new duels are paused.',maintenance:mt.state==='locked',maint:maintPublic()});const ri=+(req.body||{}).ri;const tok=crypto.randomBytes(12).toString('hex');duelTokens.set(tok,{uid:req.user.id,ri,t:Date.now()});res.json({token:tok})});
 setInterval(()=>{const now=Date.now();for(const [k,v] of duelTokens)if(now-v.t>6*3600e3)duelTokens.delete(k)},600e3).unref();
 app.post('/api/duel/finish',auth,async(req,res,next)=>{try{
   const {token,ri,r}=req.body||{};const t=duelTokens.get(token);
@@ -125,7 +127,7 @@ app.get('/api/ranked/me',auth,async(req,res,next)=>{try{const u=req.user;
   const h=await sql(`select m.*,a.username as n1,b.username as n2 from matches m left join users a on a.id=m.p1 left join users b on b.id=m.p2 where m.p1=$1 or m.p2=$1 order by m.id desc limit 10`,[u.id]);
   const history=h.map(m=>{const me1=m.p1===u.id;return {won:m.winner===u.id,opp:((me1?m.n2:m.n1)||(m.reason&&m.reason.startsWith('bot:')?m.reason.slice(4)+' (bot)':'?'))+(m.reason==='friendly'?' · friendly':''),delta:me1?m.r1_after-m.r1_before:m.r2_after-m.r2_before,stake:m.stake}});
   res.json({rank,history,...stakeStatus(u)})}catch(e){next(e)}});
-app.post('/api/settings',auth,async(req,res,next)=>{try{const b=req.body||{};const s={...(req.user.settings||{})};
+app.post('/api/settings',auth,live,async(req,res,next)=>{try{const b=req.body||{};const s={...(req.user.settings||{})};
   if(typeof b.country==='string'&&/^([A-Z]{2})?$/.test(b.country))s.country=b.country;if(typeof b.stakesOptIn==='boolean')s.stakesOptIn=b.stakesOptIn;
   await sql(`update users set settings=$2 where id=$1`,[req.user.id,JSON.stringify(s)]);res.json(stakeStatus({...req.user,settings:s}))}catch(e){next(e)}});
 
@@ -192,7 +194,7 @@ app.post('/api/admin/grant',auth,adminOnly,async(req,res,next)=>{try{const id=+r
   const u=await lockUser(id,async()=>{const u=await loadUser(id);if(!u||!u.save)throw Object.assign(new Error('That player has no save yet.'),{code:400});
     u.save.coins=Math.max(0,u.save.coins+coins);u.save.packs=Math.max(0,u.save.packs+packs);await saveUser(id,u.save);return u});
   await sql(`insert into audit(admin_id,action,detail) values($1,'grant',$2)`,[req.user.id,JSON.stringify({id,coins,packs})]);res.json({ok:true,username:u.username})}catch(e){if(e.code)return bad(res,e.code,e.message);next(e)}});
-app.post('/api/inbox/clear',auth,async(req,res,next)=>{try{await lockUser(req.user.id,async()=>{const u=await loadUser(req.user.id);if(u.save&&u.save.inbox){delete u.save.inbox;await saveUser(u.id,u.save)}});res.json({ok:true})}catch(e){next(e)}});
+app.post('/api/inbox/clear',auth,live,async(req,res,next)=>{try{await lockUser(req.user.id,async()=>{const u=await loadUser(req.user.id);if(u.save&&u.save.inbox){delete u.save.inbox;await saveUser(u.id,u.save)}});res.json({ok:true})}catch(e){next(e)}});
 app.post('/api/admin/ban',auth,adminOnly,async(req,res,next)=>{try{const id=+req.body.id;if(id===req.user.id)return bad(res,400,'You can\'t ban yourself.');
   await sql(`update users set banned=$2 where id=$1`,[id,!!req.body.banned]);if(req.body.banned)await sql(`delete from sessions where user_id=$1`,[id]);
   await sql(`insert into audit(admin_id,action,detail) values($1,'ban',$2)`,[req.user.id,JSON.stringify({id,banned:!!req.body.banned})]);res.json({ok:true})}catch(e){next(e)}});
@@ -220,6 +222,17 @@ app.get('/api/admin/stats',auth,adminOnly,async(req,res,next)=>{try{
   const rivals=await sql(`select rival,source,count(*)::int as games,sum(case when won then 1 else 0 end)::int as wins,avg(turns)::float as turns from match_decks where ${where} and bot=false and rival is not null group by rival,source order by games desc`,p);
   const bots=await sql(`select rival,count(*)::int as games,sum(case when won then 0 else 1 end)::int as wins from match_decks where ${where} and bot=true group by rival order by games desc`,p);
   res.json({days,src,overview,first,storyFirst,totalDecks,cards,rivals,bots})}catch(e){next(e)}});
+app.get('/api/status',(req,res)=>res.json({maint:maintPublic()}));
+app.get('/api/admin/maint',auth,adminOnly,(req,res)=>{const now=Date.now();let story=0;for(const v of duelTokens.values())if(now-v.t<20*60e3)story++;
+  res.json({...getMaint(),...maintDashboard(),storyDuels:story,clear:getMaint().state==='locked'&&!maintDashboard().matches.length})});
+app.post('/api/admin/maint',auth,adminOnly,async(req,res,next)=>{try{const a=String((req.body||{}).action||'');const message=String((req.body||{}).message||'').slice(0,240);
+  if(a==='start')await setMaint({state:'draining',message,since:Date.now()});
+  else if(a==='lock')await setMaint({state:'locked',message:message||getMaint().message,lockedAt:Date.now()});
+  else if(a==='end')await setMaint({state:'live',message:'',since:null});
+  else if(a==='message')await setMaint({message});
+  else return bad(res,400,'Unknown action.');
+  await sql(`insert into audit(admin_id,action,detail) values($1,'maintenance',$2)`,[req.user.id,JSON.stringify({action:a,message})]);
+  res.json({ok:true,maint:getMaint()})}catch(e){next(e)}});
 app.get('/api/health',(req,res)=>res.json({ok:true,db:DB_KIND,online:pvpOnline()}));
 // ---------- static game ----------
 app.use('/art',express.static(path.join(ROOT,'public/art'),{maxAge:'7d',immutable:true}));
@@ -227,7 +240,7 @@ app.get(['/','/index.html'],(req,res)=>{res.setHeader('Cache-Control','no-cache'
 app.use('/api',(req,res)=>bad(res,404,'Not found.'));
 app.use((err,req,res,next)=>{console.error(err);bad(res,500,'Something went wrong on the server.')});
 
-await initDb();await loadCfg();loadGame(ROOT);rules();
+await initDb();await loadCfg();await loadMaint();loadGame(ROOT);rules();
 const server=http.createServer(app);
 initPvp(server);
 server.listen(PORT,()=>console.log(`Wildcall online on http://localhost:${PORT}`));

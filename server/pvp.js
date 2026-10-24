@@ -3,14 +3,22 @@ import {WebSocketServer} from 'ws';
 import crypto from 'crypto';
 import {sql} from './db.js';
 import {makeRealm,rules,withSave} from './game.js';
-import {getCfg,lockUser,loadUser,saveUser,today,publicUser,userFromCookie,stakeStatus,recordDecks} from './shared.js';
+import {getCfg,lockUser,loadUser,saveUser,today,publicUser,userFromCookie,stakeStatus,recordDecks,getMaint,setMaint,onMaintChange,maintPublic} from './shared.js';
 
 const socks=new Map();      // userId -> ws
 const queue=[];             // {uid,name,rating,games,deck,stake,since,sig}
 const matches=new Map();    // matchId -> match
 const userMatch=new Map();  // userId -> matchId
 const PROMPT_SECS=+process.env.PVP_PROMPT_SECS||30,GRACE_SECS=+process.env.PVP_GRACE_SECS||45;
-export const pvpOnline=()=>({sockets:socks.size,queued:queue.length,matches:matches.size});
+export const pvpOnline=()=>({sockets:socks.size,queued:queue.length,matches:liveMatches().length});
+export const liveMatches=()=>[...matches.values()].filter(M=>!M.ended);
+export function maintDashboard(){return {sockets:socks.size,queued:queue.length,challenges:challenges.size,
+  matches:liveMatches().map(M=>{const D=M.S.D;return {id:M.id,players:M.pl.map(p=>p.name+(p.bot?' (bot)':'')),kind:M.bot?'bot':M.friendly?'friendly':'ranked',turnNo:D?D.turnNo:0,secs:Math.round((Date.now()-M.started)/1000),stake:M.stake||0}})}}
+const MAINT_MSG='Maintenance is starting, so new matches are paused. Back soon!';
+function checkDrain(){if(getMaint().state==='draining'&&!liveMatches().length)setMaint({state:'locked',lockedAt:Date.now()}).catch(e=>console.error(e))}
+setInterval(checkDrain,3000).unref();
+onMaintChange(m=>{if(m.state!=='live'){for(const q of queue.splice(0))sendU(q.uid,{t:'unqueued',msg:MAINT_MSG});for(const [c,e] of challenges){challenges.delete(c);sendU(e.uid,{t:'chgone',msg:MAINT_MSG})}}
+  const msg=JSON.stringify({t:'maint',...maintPublic()});for(const ws of socks.values())if(ws.readyState===1)ws.send(msg);checkDrain()});
 const send=(ws,o)=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))};
 const sendU=(uid,o)=>send(socks.get(uid),o);
 
@@ -51,6 +59,7 @@ async function entryFor(uid,deckIdx){
   const sig=d.cards.find(id=>S.C[id]&&S.C[id].kind==='unit')||'zapkit';
   return {u,e:{uid,name:u.username,rating:u.rating,games:u.wins+u.losses,deck:d.cards.slice(),stake:0,since:Date.now(),sig}}}
 async function joinQueue(uid,m){
+  if(getMaint().state!=='live')return sendU(uid,{t:'unqueued',msg:MAINT_MSG});
   if(userMatch.has(uid))return sendU(uid,{t:'err',msg:'You are already in a match.'});
   leaveQueue(uid);dropChallenge(uid);const r=await entryFor(uid,m.deck);if(r.err)return sendU(uid,{t:'unqueued',msg:r.err});const u=r.u,e=r.e;
   let stake=Math.max(0,Math.round(+m.stake||0));
@@ -64,11 +73,11 @@ const challenges=new Map(); // code -> entry
 const CODE_CHARS='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 function dropChallenge(uid){for(const [c,e] of challenges)if(e.uid===uid)challenges.delete(c)}
 setInterval(()=>{const now=Date.now();for(const [c,e] of challenges)if(now-e.since>30*60e3){challenges.delete(c);sendU(e.uid,{t:'chgone',msg:'Your challenge expired.'})}},60e3).unref();
-async function createChallenge(uid,m){if(userMatch.has(uid))return sendU(uid,{t:'err',msg:'You are already in a match.'});
+async function createChallenge(uid,m){if(getMaint().state!=='live')return sendU(uid,{t:'chgone',msg:MAINT_MSG});if(userMatch.has(uid))return sendU(uid,{t:'err',msg:'You are already in a match.'});
   leaveQueue(uid);dropChallenge(uid);const r=await entryFor(uid,m.deck);if(r.err)return sendU(uid,{t:'chgone',msg:r.err});
   let code;do{code=Array.from(crypto.randomBytes(6),b=>CODE_CHARS[b%CODE_CHARS.length]).join('')}while(challenges.has(code));
   r.e.friendly=true;challenges.set(code,r.e);sendU(uid,{t:'chcode',code})}
-async function joinChallenge(uid,m){const code=String(m.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');const host=challenges.get(code);
+async function joinChallenge(uid,m){if(getMaint().state!=='live')return sendU(uid,{t:'err',msg:MAINT_MSG});const code=String(m.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');const host=challenges.get(code);
   if(!host)return sendU(uid,{t:'err',msg:'No challenge with that code. It may have expired or already started.'});
   if(host.uid===uid)return sendU(uid,{t:'err',msg:'That\'s your own challenge. Send the code to a friend.'});
   if(userMatch.has(uid)||userMatch.has(host.uid))return sendU(uid,{t:'err',msg:'One of you is already in a match.'});
@@ -142,7 +151,7 @@ async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.
   for(let pi=0;pi<2;pi++){const p=M.pl[pi];const won=p===W;const o=out[p.uid];
     sendU(p.uid,{t:'over',won,oppName:M.pl[1-pi].name,ratingBefore:p.rating,ratingAfter:won?wAfter:lAfter,coins:o.coins,packs:o.packs,stake:M.stake||0,save:o.save,user:o.user,reason:M.reason||null});
     userMatch.delete(p.uid);clearTimeout(p.away)}
-  setTimeout(()=>matches.delete(M.id),5000);
+  setTimeout(()=>matches.delete(M.id),5000);setTimeout(checkDrain,200);
 }
 
 // bot match: only the human is rewarded; rating and ranked record don't change
@@ -153,7 +162,7 @@ async function finishBot(M,w){const cfg=getCfg();const hi=M.pl.findIndex(p=>!p.b
   await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,null,$2,$3,$3,$3,$3,0,$4,$5)`,[H.uid,won?H.uid:null,H.rating,D?D.turnNo:0,'bot:'+B.name]);
   M.pushNow();
   sendU(H.uid,{t:'over',won,bot:true,oppName:B.name+' (bot)',ratingBefore:H.rating,ratingAfter:H.rating,coins:o.coins,packs:0,stake:0,save:o.save,user:o.user,reason:M.reason||null});
-  userMatch.delete(H.uid);clearTimeout(H.away);setTimeout(()=>matches.delete(M.id),5000)}
+  userMatch.delete(H.uid);clearTimeout(H.away);setTimeout(()=>matches.delete(M.id),5000);setTimeout(checkDrain,200)}
 
 // friendly match: no rating, no rewards, just recorded
 async function finishFriendly(M,w){const D=M.S.D;const W=M.pl[w];recordDecks(statRows(M,w,'friendly'));
@@ -162,6 +171,6 @@ async function finishFriendly(M,w){const D=M.S.D;const W=M.pl[w];recordDecks(sta
   for(let pi=0;pi<2;pi++){const p=M.pl[pi];const won=pi===w;const u=await loadUser(p.uid);
     sendU(p.uid,{t:'over',won,friendly:true,oppName:M.pl[1-pi].name,ratingBefore:p.rating,ratingAfter:p.rating,coins:0,packs:0,stake:0,save:u.save,user:publicUser(u),reason:M.reason||null});
     userMatch.delete(p.uid);clearTimeout(p.away)}
-  setTimeout(()=>matches.delete(M.id),5000)}
+  setTimeout(()=>matches.delete(M.id),5000);setTimeout(checkDrain,200)}
 
 function statRows(M,w,source){const D=M.S.D;return M.pl.map((p,pi)=>({source,user_id:p.uid,bot:p.bot,won:pi===w,went_first:D?D.first===pi:null,cards:p.deck,turns:D?D.turnNo:null,rival:p.bot?p.name:null}))}

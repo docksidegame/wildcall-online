@@ -511,6 +511,9 @@ s.was{opacity:.55;margin-right:4px;font-weight:500}
 .st-cards{display:flex;flex-direction:column;gap:2px;max-height:70vh;overflow:auto}.st-cr{grid-template-columns:minmax(0,2.5fr) 70px 80px 80px;cursor:pointer}.st-cr.head{cursor:default;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:800;position:sticky;top:0;background:var(--panel)}
 .st-cr small{display:block;color:var(--dim);font-size:11px}
 .st-tr.low,.st-cr.low{opacity:.5}.st-tr.hot span:nth-child(3),.st-cr.hot span:nth-child(4){color:#b8860b;font-weight:800}.st-tr.cold span:nth-child(3),.st-cr.cold span:nth-child(4){color:var(--heart);font-weight:800}
+body.hasmaint{padding-top:34px}#maintbar{position:fixed;left:0;right:0;top:0;z-index:95;background:#c2410c;color:#fff;font-weight:700;font-size:13px;text-align:center;padding:7px 12px}
+.mpill{font-size:12px;font-weight:800;letter-spacing:.04em;padding:4px 10px;border-radius:99px;color:#fff}.mpill.live{background:var(--good)}.mpill.drain{background:#c2410c}.mpill.locked{background:var(--heart)}
+.mclear{padding:12px 14px;border-radius:12px;background:color-mix(in srgb,var(--good) 18%,var(--panel));border:1.5px solid var(--good);font-weight:700}
 /* story */
 .trial{margin-left:6px;font-size:11px;font-weight:800;letter-spacing:.04em;color:#fff;background:var(--accent);border-radius:99px;padding:1px 7px}
 .menu .btn.wide{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.1}
@@ -1568,7 +1571,7 @@ function beginDuel(i){const r=RIVALS[i];if(!rivalOpen(i))return;const keys=[];
 /* ===================== online: accounts, cloud saves, ranked ===================== */
 let ACCOUNT=null;
 async function api(path,body,method){const r=await fetch(path,{method:method||(body?'POST':'GET'),headers:body?{'content-type':'application/json'}:{},body:body?JSON.stringify(body):undefined,credentials:'same-origin'});
- let j={};try{j=await r.json()}catch(e){}if(!r.ok)throw Object.assign(new Error(j.error||('Request failed ('+r.status+')')),{status:r.status});return j}
+ let j={};try{j=await r.json()}catch(e){}if(j&&j.maint)setMaintState(j.maint);if(!r.ok)throw Object.assign(new Error(j.error||('Request failed ('+r.status+')')),{status:r.status});return j}
 let metaT=null,metaBusy=null;
 function metaBody(){return {decks:SAVE.decks,active:SAVE.active,art:SAVE.art||{},seen:SAVE.seen||[],pending:SAVE.pending||[],name:SAVE.name}}
 function metaSync(){clearTimeout(metaT);metaT=setTimeout(flushMeta,700)}
@@ -1581,7 +1584,7 @@ async function netFinishDuel(ri,r){let res=null;try{const j=await api('/api/duel
  UI.result=res||{win:r.win,ri,coins:0,packs:0,daily:false,first:false};UI.screen='result';render()}
 async function netBoot(){UI.screen='login';UI.loginMsg='Connecting…';render();
  try{const j=await api('/api/me');applyMe(j)}catch(e){ACCOUNT=null;UI.loginMsg='';UI.screen='login'}render()}
-function applyMe(j){ACCOUNT=j.user||null;SHOPCFG=j.cfg||{};SAVE=j.save||null;if(SAVE){ensureSave();ensureShop()}UI.loginMsg='';UI.screen=ACCOUNT?(SAVE?'title':'starter'):'login';
+function applyMe(j){ACCOUNT=j.user||null;SHOPCFG=j.cfg||{};SAVE=j.save||null;if(j.maint)setTimeout(()=>setMaintState(j.maint),0);if(SAVE){ensureSave();ensureShop()}UI.loginMsg='';UI.screen=ACCOUNT?(SAVE?'title':'starter'):'login';
  {const c=new URLSearchParams(location.search).get('c');if(c){RK.joinCode=c.toUpperCase().slice(0,8);if(ACCOUNT&&SAVE){UI.screen='ranked';history.replaceState(null,'',location.pathname);setTimeout(()=>toast('Pick a deck, then press Join to accept the challenge.'),400)}}}
  if(SAVE&&SAVE.inbox&&SAVE.inbox.length){const items=SAVE.inbox;delete SAVE.inbox;setTimeout(()=>{modal(`<h2>You've got rewards</h2>${items.map(x=>`<div class="act" style="cursor:default"><span style="flex:1"><b>${esc(x.note||'A gift from the Wildcall team')}</b><span>${[x.coins&&`${x.coins>0?'+':''}${x.coins} coins`,x.packs&&`${x.packs>0?'+':''}${x.packs} Booster Packs`,x.premium&&`+${x.premium} Premium Packs`,x.apex&&`+${x.apex} Apex Packs`].filter(Boolean).join(' · ')}</span></span></div>`).join('')}<button class="btn" data-act="close">Nice</button>`);api('/api/inbox/clear',{}).catch(()=>{})},300)}}
 function renderLogin(){const tab=UI.loginTab||'in';
@@ -1616,6 +1619,7 @@ function netPatch(on){if(on&&!NET_ORIG){NET_ORIG={summon,attach,evolve,retreat,p
 let NETMATCH=null,NETPROMPT=null;
 function onNet(m){
  if(m.t==='queued'){RK.queued=true;RK.since=Date.now();if(UI.screen==='ranked')render();return}
+ if(m.t==='maint'){setMaintState(m);return}
  if(m.t==='chcode'){RK.ch=m.code;RK.queued=false;if(UI.screen==='ranked')render();return}
  if(m.t==='chgone'){RK.ch=null;if(m.msg)toast(m.msg);if(UI.screen==='ranked')render();return}
  if(m.t==='unqueued'){RK.queued=false;if(m.msg)toast(m.msg);if(UI.screen==='ranked')render();return}
@@ -1643,7 +1647,7 @@ function renderRanked(){wsOpen();if(!RK.board){RK.board=[];loadRanked()}const me
      <span class="muted" style="font-size:12px">Optional. Both players put up the same coins and the winner takes the pot. Coins have no cash value. ${me.stakesLeft!=null?`${me.stakesLeft} staked matches left today.`:''}</span>`
      :`<span class="muted" style="font-size:12px">${me.stakesReason||'Stakes matches are off for your account.'} <button class="btn ghost sm" data-act="rkstakeset">Settings</button></span>`):''}
     ${RK.queued?`<div class="row"><span class="chip daily">Searching for an opponent · <b id="qtime">0s</b></span><button class="btn ghost" data-act="rkcancel">Cancel</button></div>${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)!==0&&!RK.stake?`<span class="muted" style="font-size:12px">No one around? After ${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)||30}s you'll play a bot instead (no rating change, smaller rewards).</span>`:''}`
-     :`<button class="btn gold" data-act="rkqueue" ${legal.length?'':'disabled'}>Find a match</button>`}
+     :MAINT.state!=='live'?`<p class="warn">Matches are paused for maintenance. Back soon!</p>`:`<button class="btn gold" data-act="rkqueue" ${legal.length?'':'disabled'}>Find a match</button>`}
    </div></div>
   <div class="panel rk-friend"><div style="flex:1;min-width:240px"><h3>Play a friend</h3><span class="muted" style="font-size:13px">Unrated, no rewards. Create a code and send it (or the link) to a friend, or enter theirs. Uses the deck picked above.</span></div>
    ${RK.ch?`<div class="rk-code"><span class="eyebrow">Your code</span><b class="code">${RK.ch}</b><div class="row"><button class="btn sm" data-act="chcopy">Copy link</button><button class="btn ghost sm" data-act="chcancel">Cancel</button></div><span class="muted" style="font-size:12px">Waiting for your friend to join…</span></div>`
@@ -1665,6 +1669,33 @@ function renderPvpResult(){const m=UI.pvp||{};const won=m.won;
   <p class="tagline">${m.reason?esc(m.reason):''}</p>
   <div class="row" style="justify-content:center">${m.friendly?'<span class="coins">Friendly match · no rating change or rewards</span>':m.bot?'<span class="coins">Bot match · rating unchanged</span>':`<span class="coins">Rating ${m.ratingBefore} → <b>${m.ratingAfter}</b> (${m.ratingAfter-m.ratingBefore>=0?'+':''}${m.ratingAfter-m.ratingBefore})</span>`}<span class="coins">+${m.coins||0} coins${m.packs?` · +${m.packs} pack`:''}</span>${m.stake?`<span class="coins">Stakes ${won?'+':'−'}${m.stake}</span>`:''}</div>
   <div class="row" style="justify-content:center"><button class="btn gold" data-act="ranked">${m.friendly?'Back to duels':'Play again'}</button><button class="btn ghost" data-act="home">Home</button></div></div>`}
+
+
+/* ---- maintenance mode ---- */
+let MAINT={state:'live',message:''};
+function setMaintState(m){if(!m)return;const was=MAINT.state;MAINT={state:m.state||'live',message:m.message||''};updateMaintBar();
+ const admin=ACCOUNT&&ACCOUNT.admin;
+ if(MAINT.state==='locked'&&!admin&&ACCOUNT&&!(D&&D.net&&!D.over)){if(UI.screen!=='maint'){UI.prevScreen=UI.screen;UI.screen='maint';closeModal();render();updateMaintBar()}}
+ else if(was==='locked'&&MAINT.state!=='locked'&&UI.screen==='maint'){api('/api/me').then(j=>{applyMe(j);render();toast('Wildcall is back. Thanks for waiting!')}).catch(()=>{})}
+ else if(was!==MAINT.state&&UI.screen==='ranked')render()}
+function updateMaintBar(){let b=document.getElementById('maintbar');const show=ONLINE&&ACCOUNT&&MAINT.state!=='live';
+ document.body.classList.toggle('hasmaint',!!show&&UI.screen!=='maint');
+ if(!show||UI.screen==='maint'){if(b)b.remove();return}if(!b){b=document.createElement('div');b.id='maintbar';document.body.appendChild(b)}
+ b.textContent=MAINT.state==='draining'?`Maintenance soon: new matches are paused. Finish what you're playing.${MAINT.message?' '+MAINT.message:''}`:`Maintenance mode: players are locked out${ACCOUNT&&ACCOUNT.admin?' (you can still play as admin)':''}.${MAINT.message?' '+MAINT.message:''}`}
+function renderMaint(){main.innerHTML=`<div class="title"><div class="logo">Wild<span>call</span></div><h2 style="font-size:28px">We'll be right back</h2>
+  <p class="tagline">${esc(MAINT.message||'Wildcall is down for a quick update. Your progress is saved.')}</p><p class="muted" style="font-size:13px">This page checks every few seconds and reopens the game when it's ready.</p></div>`}
+setInterval(()=>{if(ONLINE&&ACCOUNT)fetch('/api/status',{credentials:'same-origin'}).then(r=>r.json()).then(j=>setMaintState(j.maint)).catch(()=>{})},10000);
+let MD=null,MDT=null;
+async function loadMaintDash(){try{MD=await api('/api/admin/maint');setMaintState({state:MD.state,message:MD.message});if(UI.screen==='admin'){const el=document.getElementById('maintdash');if(el)el.outerHTML=maintDashHTML()}}catch(e){}}
+function maintDashHTML(){const m=MD;if(!m)return '<div class="panel" id="maintdash"><h3>Maintenance</h3><p class="muted">Loading…</p></div>';
+ const pill=m.state==='live'?'<span class="mpill live">Live</span>':m.state==='draining'?'<span class="mpill drain">Draining: waiting for matches to finish</span>':'<span class="mpill locked">Locked</span>';
+ return `<div class="panel" id="maintdash"><div class="row" style="justify-content:space-between"><h3>Maintenance</h3>${pill}</div>
+  ${m.clear?`<div class="mclear">✓ Clear to update. No matches are running and players are locked out. Push your update now, then end maintenance once it's live.${m.storyDuels?` (${m.storyDuels} story duel${m.storyDuels>1?'s were':' was'} started in the last 20 minutes and may be lost.)`:''}</div>`:''}
+  <div class="st-tiles"><div class="st-tile"><span class="eyebrow">Live matches</span><b>${m.matches.length}</b></div><div class="st-tile"><span class="eyebrow">In queue</span><b>${m.queued}</b></div><div class="st-tile"><span class="eyebrow">Connected</span><b>${m.sockets}</b></div><div class="st-tile"><span class="eyebrow">Recent story duels</span><b>${m.storyDuels}</b></div></div>
+  ${m.matches.length?`<div class="rk-table">${m.matches.map(x=>`<div class="rk-tr" style="grid-template-columns:1fr 80px 80px 70px"><b>${x.players.map(esc).join(' vs ')}</b><span>${x.kind}${x.stake?' · '+x.stake:''}</span><span>turn ${x.turnNo}</span><span class="muted">${Math.floor(x.secs/60)}m</span></div>`).join('')}</div>`:''}
+  <input id="mmsg" class="atext" maxlength="240" placeholder="Message for players, e.g. New cards are on the way! Back in 10 minutes." value="${esc(m.message||'')}">
+  <div class="row">${m.state==='live'?`<button class="btn gold" data-act="mstart">Start maintenance</button><span class="muted" style="font-size:12px">Stops new matches, lets running ones finish, then locks players out automatically.</span>`
+   :`${m.state==='draining'?`<button class="btn ghost" data-act="mlock">Lock now (ends nothing, just skips waiting)</button>`:''}<button class="btn ghost" data-act="mmsgsave">Update message</button><button class="btn" data-act="mend">End maintenance</button>`}</div></div>`}
 
 /* ---- admin ---- */
 let ADM={cfg:null,users:null,q:''};
@@ -1715,11 +1746,12 @@ function renderAdmStats(){const S=STATS,d=S.data;const pct=(w,n)=>n?Math.round(1
    <p class="muted" style="font-size:12px">Win rate = how often a deck containing the card won. Gold = 60%+ (possibly too strong), red = 40% or lower, greyed = under 20 decks. Story and bot games are included when ticked above; bot decks themselves are never counted.</p></div>
  </div></div>`}
 async function loadAdmin(){try{const [j,u]=await Promise.all([api('/api/admin/config'),api('/api/admin/users?q='+encodeURIComponent(ADM.q||''))]);ADM.cfg=j.cfg;ADM.users=u.rows;ADM.total=u.total;if(UI.screen==='admin')render()}catch(e){netErr(e)}}
-function renderAdmin(){if(!ADM.cfg){main.innerHTML=`<div class="screen"><div class="wrap">${nav('Admin')}<p class="muted">Loading…</p></div></div>`;loadAdmin();return}
+function renderAdmin(){clearInterval(MDT);MDT=setInterval(()=>{if(UI.screen!=='admin'){clearInterval(MDT);return}loadMaintDash()},3000);if(!MD)loadMaintDash();if(!ADM.cfg){main.innerHTML=`<div class="screen"><div class="wrap">${nav('Admin')}<p class="muted">Loading…</p></div></div>`;loadAdmin();return}
  const c=ADM.cfg;const pr=c.prices||{},sale=c.sale||{},dis=c.disabled||[],mk=c.market||{},st=c.stakes||{},pvp=c.pvp||{},caps=c.caps||{};
  const num=(id,v,ph)=>`<input class="anum" data-k="${id}" type="number" min="0" value="${v??''}" placeholder="${ph??''}">`;
  const tog=(id,label)=>`<label class="chk"><input type="checkbox" data-dis="${id}" ${dis.includes(id)?'':'checked'}> ${label}</label>`;
  main.innerHTML=`<div class="screen"><div class="wrap">${nav('Admin')}
+  ${maintDashHTML()}
   <div class="panel"><h3>Sale</h3><div class="agrid"><label>Everything % off ${num('sale.all',sale.all,0)}</label>${SHOP_ITEMS.map(it=>`<label>${it.n} % off ${num('sale.items.'+it.id,(sale.items||{})[it.id],0)}</label>`).join('')}<label>Theme decks % off ${num('sale.items.theme',(sale.items||{}).theme,0)}</label><label>Trail Market % off ${num('sale.items.market',(sale.items||{}).market,0)}</label></div></div>
   <div class="panel"><h3>Prices</h3><div class="agrid">${SHOP_ITEMS.map(it=>`<label>${it.n} ${num('prices.'+it.id,pr[it.id],it.price)}</label>`).join('')}<label>Theme deck ${num('prices.theme',pr.theme,THEME_PRICE)}</label>${['c','u','r','h'].map(r=>`<label>Market ${RAR_NAME[r]} ${num('market.prices.'+r,(mk.prices||{})[r],MARKET_PRICE[r])}</label>`).join('')}</div></div>
   <div class="panel"><h3>What's for sale</h3><div class="agrid">${SHOP_ITEMS.map(it=>tog(it.id,it.n)).join('')}${tog('themes','Theme decks')}${THEMES.map(t=>tog('theme:'+t.id,'· '+t.n)).join('')}${tog('market','Trail Market')}${tog('sell','Trade in extras')}</div>
@@ -2202,7 +2234,7 @@ function render(){
  if(NET&&NET.server){NET.dirty&&NET.dirty();return}
  if(SIM)return;
  const s=UI.screen;
- ({admstats:renderAdmStats,admuser:renderAdmUser,login:renderLogin,ranked:renderRanked,pvpresult:renderPvpResult,admin:renderAdmin,gallery:renderGallery,haul:renderHaul,title:renderTitle,starter:renderStarter,ladder:renderLadder,talk:renderTalk,bounties:renderBounties,duel:renderDuel,result:renderResult,shop:renderShop,pack:renderPack,binder:renderBinder,decks:renderDecks,edit:renderEdit}[s])();
+ ({maint:renderMaint,admstats:renderAdmStats,admuser:renderAdmUser,login:renderLogin,ranked:renderRanked,pvpresult:renderPvpResult,admin:renderAdmin,gallery:renderGallery,haul:renderHaul,title:renderTitle,starter:renderStarter,ladder:renderLadder,talk:renderTalk,bounties:renderBounties,duel:renderDuel,result:renderResult,shop:renderShop,pack:renderPack,binder:renderBinder,decks:renderDecks,edit:renderEdit}[s])();
 }
 function coinsHTML(){return `<span class="coins"><i></i>${SAVE.coins}</span>`}
 function nav(title){return `<div class="topnav"><button class="btn ghost sm" data-act="home">← Home</button><h2>${title}</h2>${coinsHTML()}</div>`}
@@ -2637,6 +2669,9 @@ document.addEventListener('click',async ev=>{
   case 'admin':closeModal();ADM.cfg=null;UI.screen='admin';render();break;
   case 'admsave':case 'admsearch':case 'admgrant':case 'admban':case 'admawardall':case 'admusave':case 'admuaward':adminAct(a,ds);break;
   case 'admopen':openPlayer(+ds.id);break;
+  case 'mstart':case 'mlock':case 'mend':case 'mmsgsave':{const action={mstart:'start',mlock:'lock',mend:'end',mmsgsave:'message'}[a];
+    if(a==='mend'&&MD&&MD.state==='locked'&&(!MODAL||MODAL.dataset.confirm!=='mend')){const m=modal(`<h2>End maintenance?</h2><p class="muted">Make sure your update has finished deploying first. Players will be let back in straight away.</p><div class="row"><button class="btn" data-act="mend">End maintenance</button><button class="btn ghost" data-act="close">Not yet</button></div>`);m.dataset.confirm='mend';break}
+    closeModal();try{const j=await api('/api/admin/maint',{action,message:($('#mmsg')||{}).value||''});setMaintState(j.maint);await loadMaintDash();toast(action==='start'?'Maintenance started. New matches are paused.':action==='end'?'Maintenance ended. Players are back in.':action==='lock'?'Players are locked out.':'Message updated.')}catch(x){netErr(x)}break}
   case 'admstats':STATS.data=null;UI.screen='admstats';render();break;
   case 'stload':STATS.days=+$('#stdays').value;STATS.src=[...document.querySelectorAll('.stsrc:checked')].map(x=>x.value);STATS.data=null;render();break;
   case 'admback':UI.screen='admin';render();break;

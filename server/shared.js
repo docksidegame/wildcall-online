@@ -25,3 +25,11 @@ export function stakeStatus(u){const st=CFG.stakes||{};const s=u.settings||{};co
 // balance stats: one row per deck per finished match
 export async function recordDecks(rows){for(const r of rows){try{const cards=[...new Set((r.cards||[]).filter(x=>typeof x==='string'))];
   await sql(`insert into match_decks(source,user_id,bot,won,went_first,cards,turns,rival) values($1,$2,$3,$4,$5,$6,$7,$8)`,[r.source,r.user_id??null,!!r.bot,!!r.won,r.went_first??null,JSON.stringify(cards),r.turns??null,r.rival??null])}catch(e){console.error('[stats]',e.message)}}}
+
+// ---------- maintenance mode: live -> draining (no new matches) -> locked (players see a maintenance screen) ----------
+let MAINT={state:'live',message:'',since:null};let maintHook=null;
+export const getMaint=()=>MAINT;
+export function onMaintChange(f){maintHook=f}
+export async function loadMaint(){const r=await sql(`select value from config where key='maint'`);if(r[0])MAINT={...MAINT,...r[0].value};if(MAINT.state==='draining')await setMaint({state:'locked',lockedAt:Date.now()})}
+export async function setMaint(m){MAINT={...MAINT,...m};await sql(`insert into config(key,value) values('maint',$1) on conflict(key) do update set value=excluded.value`,[JSON.stringify(MAINT)]);if(maintHook)maintHook(MAINT)}
+export const maintPublic=()=>({state:MAINT.state,message:MAINT.message||''});
