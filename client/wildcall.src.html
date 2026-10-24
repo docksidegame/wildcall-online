@@ -1246,7 +1246,8 @@ function countOf(cards){const n={};cards.forEach(id=>n[id]=(n[id]||0)+1);return 
 STARTERS.forEach(st=>st.deck60=to60(expand(st.deck),st.types));
 RIVALS.forEach(r=>r.heart=RIVAL_TIER[r.id].heart);
 function rivalDeck60(r){return r.deck60||(r.deck60=rivalDeck(r))}
-function rivalDeck(r){const tier=RIVAL_TIER[r.id];const types=(tier.types||r.types).slice(0,2);const pool=id=>isExtra(id)?limitOf(id):(tier.orig&&ORDER_NEW.includes(id))?0:!isUnit(id)?4:(tier.r.includes(C[id].r)||(tier.plus||[]).includes(id))?limitOf(id):0;return buildDeck(types,tier.style,tier.ace?aceCore(tier.ace,tier.heavy):[],pool)}
+function rivalDeck(r){const tier=RIVAL_TIER[r.id];const types=(tier.types||r.types).slice(0,2);const pool=id=>isExtra(id)?limitOf(id):(tier.orig&&ORDER_NEW.includes(id))?0:!isUnit(id)?4:(tier.r.includes(C[id].r)||(tier.plus||[]).includes(id))?limitOf(id):0;// early chapters keep their tuned difficulty; from chapter 5 on, rivals get the stronger build
+ return buildDeck(types,tier.style,tier.ace?aceCore(tier.ace,tier.heavy):[],pool,{eplus:(r.ch||0)>=4?3:0,apex:false})}
 function aceCore(ace,heavy){const chain=[];let x=ace;while(x){chain.unshift(x);x=C[x].from}return chain.flatMap((id,i)=>Array(isApex(id)?1:heavy?4-i:Math.max(1,3-i)).fill(id))}
 
 
@@ -2479,8 +2480,11 @@ function applyOps(E,ops){for(const o of ops){
  if(o.add&&E.cards.length<DECK&&E.cards.filter(x=>x===o.add).length<owned(o.add))E.cards.push(o.add);
  if(o.fill){const t=topTypes(E.cards);E.cards=buildDeck(t.length?t:['ember','volt'],'balanced',E.cards.slice())}
  if(o.energy)E.cards=rebalanceEnergy(E.cards)}}
-function buildDeck(types,style,start,ownFn){
- const owned=ownFn||ownedCard;
+// Tuned by simulation: +3 energy over the old estimate made built decks win 69% vs the starters (was 51%).
+// The AI also plays far worse with an Apex in its deck (52% vs 68%), so AI-built decks skip Apex unless it's a rival's signature card.
+let BUILD_OPT={eplus:3};
+function buildDeck(types,style,start,ownFn,opt){opt=opt||BUILD_OPT;
+ const owned0=ownFn||ownedCard;const owned=id=>isUnit(id)&&(C[id].stage>(opt.maxStage??3)||(isApex(id)&&opt.apex===false))?0:owned0(id);
  const cards=(start||[]).filter(id=>!isEnergy(id));const n=countOf(cards);const can=id=>(n[id]||0)<owned(id);
  const E0=17,LANDS_N=types.length>1?4:3,TR_MIN=style==='aggro'?9:11;const unitCap=DECK-E0-LANDS_N-TR_MIN;
  let target=DECK-E0;const nUnits=()=>cards.filter(isUnit).length;
@@ -2488,13 +2492,13 @@ function buildDeck(types,style,start,ownFn){
  const sc=id=>cardScore(id,style);
  const lineBonus=b=>{const evo=ORDER.filter(e=>isEvo(e)&&owned(e)&&lineOf(e)===b);return evo.length?Math.max(...evo.map(sc))*.7+evo.length:0};
  const basics=ORDER.filter(id=>isBasic(id)&&types.includes(C[id].type)&&owned(id)).sort((a,b)=>(sc(b)+lineBonus(b))-(sc(a)+lineBonus(a)));
- const bTarget=style==='aggro'?18:style==='defensive'?14:16;
+ const bTarget=(opt.basics||0)+(style==='aggro'?18:style==='defensive'?14:16);
  // one evolution line per type first, then the best Basics
  for(const t of types){const top=basics.filter(id=>C[id].type===t&&lineBonus(id)>0)[0];if(top)for(let k=0;k<4;k++)add(top)}
  for(const id of basics){if(cards.filter(isBasic).length>=bTarget)break;for(let k=0;k<4&&cards.filter(isBasic).length<bTarget;k++)add(id)}
  // evolutions: strongest lines first, 3 Stage 1 and 2 Stage 2 at most per line
  const lines=basics.filter(id=>cards.includes(id)&&lineBonus(id)>0).sort((a,b)=>lineBonus(b)-lineBonus(a));
- for(const b of lines){const s1=ORDER.filter(e=>isEvo(e)&&C[e].from===b&&owned(e));for(const e of s1){const cap=Math.min(3,n[b]||0);while((n[e]||0)<cap&&add(e));const s2=ORDER.filter(x=>isEvo(x)&&C[x].from===e&&owned(x));for(const x of s2)for(let k=0;k<Math.min(2,(n[e]||0)-1);k++)add(x)}}
+ for(const b of lines){const s1=ORDER.filter(e=>isEvo(e)&&C[e].from===b&&owned(e));for(const e of s1){const cap=Math.min(3,n[b]||0);while((n[e]||0)<cap&&add(e));const s2=ORDER.filter(x=>isEvo(x)&&C[x].from===e&&owned(x));for(const x of s2)for(let k=0;k<Math.min(opt.s2??2,(n[e]||0)-1);k++)add(x)}}
  types.slice(0,2).forEach(t=>{const l=LAND_OF[t];while((n[l]||0)<(types.length>1?2:3)&&add(l));});
  {const ap=ORDER.filter(x=>isApex(x)&&owned(x)&&(n[C[x].from]||0)>=1).sort((x,y)=>sc(y)-sc(x))[0];if(ap&&!cards.some(isApex))add(ap,DECK)}
  const caps={guide:3,alder:2,tonic:2,mix:2,eguide:2,whistle:2,ecompass:2,research:2,courier:2,cell:2,hammer:2,taunt:2,sever:2,evonotes:2,ranger:1,shelter:1,perspective:1,growth:1,rope:1,charm:1};
@@ -2503,7 +2507,7 @@ function buildDeck(types,style,start,ownFn){
  for(const id of tr)while((n[id]||0)<caps[id]&&add(id));
  for(const id of basics)while(add(id,DECK));
  for(const id of ORDER.filter(x=>!isUnit(x)))while(add(id));
- let E=Math.max(MIN_ENERGY,recEnergy(cards));while(cards.length+E>DECK&&cards.length){const A=countOf(cards);const needed=new Set(cards.filter(isEvo).map(id=>C[id].from));const cut=[...new Set(cards)].filter(id=>!(needed.has(id)&&A[id]<=1)).sort((a,b)=>sc(a)-sc(b))[0];cards.splice(cards.lastIndexOf(cut),1)}
+ let E=opt.energy?opt.energy:Math.max(MIN_ENERGY,recEnergy(cards)+(opt.eplus||0));while(cards.length+E>DECK&&cards.length){const A=countOf(cards);const needed=new Set(cards.filter(isEvo).map(id=>C[id].from));const cut=[...new Set(cards)].filter(id=>!(needed.has(id)&&A[id]<=1)).sort((a,b)=>sc(a)-sc(b))[0];cards.splice(cards.lastIndexOf(cut),1)}
  target=DECK-E;for(const id of basics)while(add(id,DECK));for(const id of tr)while((n[id]||0)<4&&add(id));
  E=DECK-cards.length;return cards.concat(energySplit(cards,E))}
 async function simDuels(cards,ri,count,onStep){const res=[];
@@ -2732,7 +2736,7 @@ addEventListener('resize',()=>{if(UI.screen==='duel')layoutHand()});
 
 if(MIGRATED)setTimeout(()=>toast('Decks are now 60 cards. Yours were expanded with energy and Lands, and any extra copies were added to your collection.'),600);
 window.WCS={botFor,setSave:x=>{SAVE=x;if(SAVE){ensureSave();ensureShop()}},getSave:()=>SAVE,setCfg:c=>{SHOPCFG=c||{}},acts:{applyPvpResult,buyItem,buyTheme,buySingle,sellExtras,claimBounty,takePack:k=>{ensureShop();const r=takePack(k);persist();return r},takeAll,pickStarter,applyDuelResult},deckProblems,isExtra,limitOf,C,ORDER,RIVALS,SCENES,rivalOpen,today,hasFinish,finList,BOUNTIES,startNetDuel,netAct,netView,setNet:n=>{NET=n},get D(){return D},setFast:f=>{FAST=f;SIM=f},aiTurnFor:async pi=>{await aiTurn(pi)},endTurn:()=>endTurn()};
-window.WC={fitTcg,cardHTML,aceCore,get SAVE(){return SAVE},endDuel:w=>endDuel(w),CHAPTERS,BOUNTIES,statVal,rivalDeck60,analyzeDeck,buildDeck,simDuels,to60,rebalanceEnergy,ENERGY,get UI(){return UI},get D(){return D},PROTO,landOptions,activateLand,playLand,C,RIVALS,STARTERS,expand,deckProblems,setFast:f=>{FAST=f},
+window.WC={setBuildOpt:o=>{BUILD_OPT=o||{}},fitTcg,cardHTML,aceCore,get SAVE(){return SAVE},endDuel:w=>endDuel(w),CHAPTERS,BOUNTIES,statVal,rivalDeck60,analyzeDeck,buildDeck,simDuels,to60,rebalanceEnergy,ENERGY,get UI(){return UI},get D(){return D},PROTO,landOptions,activateLand,playLand,C,RIVALS,STARTERS,expand,deckProblems,setFast:f=>{FAST=f},
  testDuel:async(a,b,ri)=>{FAST=true;SIM=true;D=null;UI.test=null;startDuel(ri||0,[a,b]);D.test=true;D.p[0].ai=true;D.p[0].name='Bot A';D.p[1].name='Bot B';
   for(let i=0;i<300000&&UI.test==null;i++)await fastTick();for(let i=0;i<200;i++)await fastTick();SIM=false;return {winner:UI.test,turns:D.turnNo,hearts:D.p.map(p=>p.heart)}},
  aiTurn,attack,summon,evolve,attach,playTrainer,units,findUnit,canAttack,renderAll:render};
