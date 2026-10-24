@@ -23,7 +23,7 @@ export function initPvp(server){
     socks.set(uid,ws);ws.isAlive=true;ws.on('pong',()=>{ws.isAlive=true});
     const mid=userMatch.get(uid);if(mid&&matches.has(mid))reattach(matches.get(mid),uid);
     ws.on('message',buf=>{let m;try{m=JSON.parse(buf)}catch(e){return}onMsg(uid,m).catch(e=>{console.error('[pvp]',e);send(ws,{t:'err',msg:e.message||'Error'})})});
-    ws.on('close',()=>{if(socks.get(uid)===ws){socks.delete(uid);leaveQueue(uid);const mid=userMatch.get(uid);if(mid&&matches.has(mid))dropped(matches.get(mid),uid)}});
+    ws.on('close',()=>{if(socks.get(uid)===ws){socks.delete(uid);leaveQueue(uid);dropChallenge(uid);const mid=userMatch.get(uid);if(mid&&matches.has(mid))dropped(matches.get(mid),uid)}});
   });
   setInterval(()=>{for(const ws of wss.clients){if(!ws.isAlive){ws.terminate();continue}ws.isAlive=false;ws.ping()}},25000).unref();
   setInterval(matchmake,1500).unref();
@@ -32,6 +32,9 @@ function leaveQueue(uid){const i=queue.findIndex(q=>q.uid===uid);if(i>=0)queue.s
 async function onMsg(uid,m){
   if(m.t==='queue')return joinQueue(uid,m);
   if(m.t==='cancel'){leaveQueue(uid);sendU(uid,{t:'unqueued'});return}
+  if(m.t==='chcreate')return createChallenge(uid,m);
+  if(m.t==='chjoin')return joinChallenge(uid,m);
+  if(m.t==='chcancel'){dropChallenge(uid);sendU(uid,{t:'chgone'});return}
   const mid=userMatch.get(uid);const M=mid&&matches.get(mid);if(!M)return;
   const pi=M.pl.findIndex(p=>p.uid===uid);if(pi<0)return;
   if(m.t==='act'){if(m.a==='forfeit'){M.chain=M.chain.then(()=>M.S.netAct(pi,'forfeit'));return}
@@ -40,20 +43,38 @@ async function onMsg(uid,m){
     M.chain=M.chain.then(async()=>{const ok=await M.S.netAct(pi,m.a,args);if(!ok&&m.a!=='endTurn')sendU(uid,{t:'err',msg:'That move isn\'t allowed right now.'});M.push()}).catch(e=>console.error('[match]',e));return}
   if(m.t==='choice'){const p=M.prompts.get(m.id);if(!p||p.pi!==pi)return;const ok=p.opts.find(o=>JSON.stringify(o.val)===JSON.stringify(m.val));p.finish(ok?ok.val:p.opts[0].val);return}
 }
+async function entryFor(uid,deckIdx){
+  const u=await loadUser(uid);if(!u||!u.save)return {err:'Create your save first.'};
+  const S=rules();const d=u.save.decks[+deckIdx];if(!d)return {err:'Pick a deck.'};
+  const probs=S.deckProblems(d.cards);if(probs.length)return {err:'That deck isn\'t legal: '+probs.join(', ')};
+  const cnt={};for(const id of d.cards)if(!S.isExtra(id)){cnt[id]=(cnt[id]||0)+1;if(cnt[id]>(u.save.coll[id]||0))return {err:'You don\'t own every card in that deck.'}}
+  const sig=d.cards.find(id=>S.C[id]&&S.C[id].kind==='unit')||'zapkit';
+  return {u,e:{uid,name:u.username,rating:u.rating,games:u.wins+u.losses,deck:d.cards.slice(),stake:0,since:Date.now(),sig}}}
 async function joinQueue(uid,m){
   if(userMatch.has(uid))return sendU(uid,{t:'err',msg:'You are already in a match.'});
-  leaveQueue(uid);const u=await loadUser(uid);if(!u||!u.save)return sendU(uid,{t:'unqueued',msg:'Create your save first.'});
-  const S=rules();const d=u.save.decks[+m.deck];if(!d)return sendU(uid,{t:'unqueued',msg:'Pick a deck.'});
-  const probs=S.deckProblems(d.cards);if(probs.length)return sendU(uid,{t:'unqueued',msg:'That deck isn\'t legal: '+probs.join(', ')});
-  const cnt={};for(const id of d.cards)if(!S.isExtra(id)){cnt[id]=(cnt[id]||0)+1;if(cnt[id]>(u.save.coll[id]||0))return sendU(uid,{t:'unqueued',msg:'You don\'t own every card in that deck.'})}
+  leaveQueue(uid);dropChallenge(uid);const r=await entryFor(uid,m.deck);if(r.err)return sendU(uid,{t:'unqueued',msg:r.err});const u=r.u,e=r.e;
   let stake=Math.max(0,Math.round(+m.stake||0));
   if(stake){const ss=stakeStatus(u);const cfg=getCfg().stakes;if(!ss.stakesAllowed)return sendU(uid,{t:'unqueued',msg:ss.stakesReason});
     if(stake>cfg.max||!(cfg.options||[]).includes(stake))return sendU(uid,{t:'unqueued',msg:'That stake isn\'t allowed.'});
     if(u.save.coins<stake)return sendU(uid,{t:'unqueued',msg:'You don\'t have enough coins for that stake.'})}
-  const sig=d.cards.find(id=>S.C[id]&&S.C[id].kind==='unit')||'zapkit';
-  queue.push({uid,name:u.username,rating:u.rating,games:u.wins+u.losses,deck:d.cards.slice(),stake,since:Date.now(),sig});
-  sendU(uid,{t:'queued'});
+  e.stake=stake;queue.push(e);sendU(uid,{t:'queued'});
 }
+// ---- friend challenges: a short code (or link) starts an unrated match between two players ----
+const challenges=new Map(); // code -> entry
+const CODE_CHARS='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function dropChallenge(uid){for(const [c,e] of challenges)if(e.uid===uid)challenges.delete(c)}
+setInterval(()=>{const now=Date.now();for(const [c,e] of challenges)if(now-e.since>30*60e3){challenges.delete(c);sendU(e.uid,{t:'chgone',msg:'Your challenge expired.'})}},60e3).unref();
+async function createChallenge(uid,m){if(userMatch.has(uid))return sendU(uid,{t:'err',msg:'You are already in a match.'});
+  leaveQueue(uid);dropChallenge(uid);const r=await entryFor(uid,m.deck);if(r.err)return sendU(uid,{t:'chgone',msg:r.err});
+  let code;do{code=Array.from(crypto.randomBytes(6),b=>CODE_CHARS[b%CODE_CHARS.length]).join('')}while(challenges.has(code));
+  r.e.friendly=true;challenges.set(code,r.e);sendU(uid,{t:'chcode',code})}
+async function joinChallenge(uid,m){const code=String(m.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');const host=challenges.get(code);
+  if(!host)return sendU(uid,{t:'err',msg:'No challenge with that code. It may have expired or already started.'});
+  if(host.uid===uid)return sendU(uid,{t:'err',msg:'That\'s your own challenge. Send the code to a friend.'});
+  if(userMatch.has(uid)||userMatch.has(host.uid))return sendU(uid,{t:'err',msg:'One of you is already in a match.'});
+  const r=await entryFor(uid,m.deck);if(r.err)return sendU(uid,{t:'err',msg:r.err});
+  if(!challenges.has(code))return sendU(uid,{t:'err',msg:'That challenge just closed.'});
+  challenges.delete(code);leaveQueue(uid);dropChallenge(uid);r.e.friendly=true;startMatch(host,r.e).catch(e=>console.error('[friendly]',e))}
 function matchmake(){
   queue.sort((a,b)=>a.since-b.since);
   for(let i=0;i<queue.length;i++){const a=queue[i];const waitA=(Date.now()-a.since)/1000;
@@ -71,7 +92,7 @@ async function startMatch(a,b){
     if(!await take(a)){sendU(a.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});b.since=Date.now();queue.push(b);return}
     if(!await take(b)){await refund(a);sendU(b.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});a.since=Date.now();queue.push(a);return}}
   const id=crypto.randomBytes(8).toString('hex');const realm=makeRealm();const S=realm.WCS;
-  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,bot:!!q.bot,title:q.title,away:null})),bot:!!b.bot,stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
+  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,bot:!!q.bot,title:q.title,away:null})),bot:!!b.bot,friendly:!!(a.friendly||b.friendly),stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
   matches.set(id,M);M.pl.forEach(p=>{if(p.uid!=null)userMatch.set(p.uid,id)});
   const cfg=getCfg();
   const NET={server:true,
@@ -88,10 +109,10 @@ async function startMatch(a,b){
       sendU(M.pl[pi].uid,{t:'state',view:S.netView(pi),fx,ms:M.deadline?Math.max(0,M.deadline-Date.now()):null,opp:oppInfo(M,pi)})}};
   M.push=()=>{if(M.pushT||M.ended)return;M.pushT=setImmediate(M.pushNow)};
   S.setNet(NET);S.setFast(!M.bot); // bot matches keep the AI's natural pacing
-  for(let pi=0;pi<2;pi++)sendU(M.pl[pi].uid,{t:'match',id,opp:oppInfo(M,pi),stake:M.stake});
+  for(let pi=0;pi<2;pi++)sendU(M.pl[pi].uid,{t:'match',id,opp:oppInfo(M,pi),stake:M.stake,friendly:M.friendly});
   S.startNetDuel([a.deck,b.deck],[a.name,b.name],[false,!!b.bot]);
 }
-const oppInfo=(M,pi)=>{const o=M.pl[1-pi];return {name:o.name,rating:o.rating,sig:o.sig,bot:o.bot,title:o.title}};
+const oppInfo=(M,pi)=>{const o=M.pl[1-pi];return {name:o.name,rating:o.rating,sig:o.sig,bot:o.bot,title:o.title,friendly:M.friendly}};
 async function refund(q){await lockUser(q.uid,async()=>{const u=await loadUser(q.uid);u.save.coins+=q.stake;await saveUser(u.id,u.save)})}
 function timeoutTurn(M,pi){if(M.ended)return;const D=M.S.D;if(!D||D.over||D.turn!==pi)return;
   for(const p of [...M.prompts.values()])if(p.pi===pi)p.finish(p.opts[0].val);
@@ -103,6 +124,7 @@ function dropped(M,uid){const pi=M.pl.findIndex(p=>p.uid===uid);if(pi<0||M.ended
 async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.turnT);for(const p of [...M.prompts.values()])p.finish(p.opts[0].val);
   const cfg=getCfg();const W=M.pl[w],L=M.pl[1-w];
   if(M.bot)return finishBot(M,w);
+  if(M.friendly)return finishFriendly(M,w);
   const K=p=>p.games<10?40:32;const ea=1/(1+Math.pow(10,(L.rating-W.rating)/400));
   const wAfter=Math.round(W.rating+K(W)*(1-ea)),lAfter=Math.max(100,Math.round(L.rating+K(L)*(0-(1-ea))));
   const out={};
@@ -132,3 +154,12 @@ async function finishBot(M,w){const cfg=getCfg();const hi=M.pl.findIndex(p=>!p.b
   M.pushNow();
   sendU(H.uid,{t:'over',won,bot:true,oppName:B.name+' (bot)',ratingBefore:H.rating,ratingAfter:H.rating,coins:o.coins,packs:0,stake:0,save:o.save,user:o.user,reason:M.reason||null});
   userMatch.delete(H.uid);clearTimeout(H.away);setTimeout(()=>matches.delete(M.id),5000)}
+
+// friendly match: no rating, no rewards, just recorded
+async function finishFriendly(M,w){const D=M.S.D;const W=M.pl[w];
+  await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,$2,$3,$4,$5,$4,$5,0,$6,'friendly')`,[M.pl[0].uid,M.pl[1].uid,W.uid,M.pl[0].rating,M.pl[1].rating,D?D.turnNo:0]);
+  M.pushNow();
+  for(let pi=0;pi<2;pi++){const p=M.pl[pi];const won=pi===w;const u=await loadUser(p.uid);
+    sendU(p.uid,{t:'over',won,friendly:true,oppName:M.pl[1-pi].name,ratingBefore:p.rating,ratingAfter:p.rating,coins:0,packs:0,stake:0,save:u.save,user:publicUser(u),reason:M.reason||null});
+    userMatch.delete(p.uid);clearTimeout(p.away)}
+  setTimeout(()=>matches.delete(M.id),5000)}

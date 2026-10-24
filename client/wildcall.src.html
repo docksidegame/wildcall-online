@@ -492,6 +492,18 @@ button.pill.swapbtn:disabled{cursor:default}
 .tcg .badge.conv{background:var(--gold);color:#2a1d02}
 .sitag.sale{background:var(--heart);color:#fff}
 s.was{opacity:.55;margin-right:4px;font-weight:500}
+.adm-table{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.adm-tr{display:grid;grid-template-columns:minmax(0,2.4fr) repeat(4,minmax(0,1fr)) minmax(0,1.3fr);gap:8px;align-items:center;padding:8px 10px;border-radius:8px;border:0;background:none;font:inherit;color:var(--ink);text-align:left;cursor:pointer;font-variant-numeric:tabular-nums}
+.adm-tr:nth-child(even){background:var(--panel2)}.adm-tr:not(.head):hover{outline:2px solid var(--accent)}
+.adm-tr.head{cursor:default;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:800}
+.adm-tr small{display:block;color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adm-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.aform{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.aform label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--dim)}
+.adm-kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14px}.adm-kv span{color:var(--dim)}
+.adm-log{font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)}.adm-log code{font-size:11px;color:var(--dim);word-break:break-all}
+@media (max-width:560px){.adm-tr{grid-template-columns:minmax(0,2fr) repeat(2,minmax(0,1fr))}.adm-tr span:nth-child(n+4){display:none}}
+.rk-friend{flex-direction:row;flex-wrap:wrap;align-items:center;gap:16px}
+.rk-code{display:flex;flex-direction:column;gap:6px;align-items:flex-start}.rk-code .code{font-family:var(--display);font-size:34px;letter-spacing:.18em;line-height:1}
 /* story */
 .trial{margin-left:6px;font-size:11px;font-weight:800;letter-spacing:.04em;color:#fff;background:var(--accent);border-radius:99px;padding:1px 7px}
 .menu .btn.wide{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.1}
@@ -1561,7 +1573,9 @@ async function netFinishDuel(ri,r){let res=null;try{const j=await api('/api/duel
  UI.result=res||{win:r.win,ri,coins:0,packs:0,daily:false,first:false};UI.screen='result';render()}
 async function netBoot(){UI.screen='login';UI.loginMsg='Connecting…';render();
  try{const j=await api('/api/me');applyMe(j)}catch(e){ACCOUNT=null;UI.loginMsg='';UI.screen='login'}render()}
-function applyMe(j){ACCOUNT=j.user||null;SHOPCFG=j.cfg||{};SAVE=j.save||null;if(SAVE){ensureSave();ensureShop()}UI.loginMsg='';UI.screen=ACCOUNT?(SAVE?'title':'starter'):'login'}
+function applyMe(j){ACCOUNT=j.user||null;SHOPCFG=j.cfg||{};SAVE=j.save||null;if(SAVE){ensureSave();ensureShop()}UI.loginMsg='';UI.screen=ACCOUNT?(SAVE?'title':'starter'):'login';
+ {const c=new URLSearchParams(location.search).get('c');if(c){RK.joinCode=c.toUpperCase().slice(0,8);if(ACCOUNT&&SAVE){UI.screen='ranked';history.replaceState(null,'',location.pathname);setTimeout(()=>toast('Pick a deck, then press Join to accept the challenge.'),400)}}}
+ if(SAVE&&SAVE.inbox&&SAVE.inbox.length){const items=SAVE.inbox;delete SAVE.inbox;setTimeout(()=>{modal(`<h2>You've got rewards</h2>${items.map(x=>`<div class="act" style="cursor:default"><span style="flex:1"><b>${esc(x.note||'A gift from the Wildcall team')}</b><span>${[x.coins&&`${x.coins>0?'+':''}${x.coins} coins`,x.packs&&`${x.packs>0?'+':''}${x.packs} Booster Packs`,x.premium&&`+${x.premium} Premium Packs`,x.apex&&`+${x.apex} Apex Packs`].filter(Boolean).join(' · ')}</span></span></div>`).join('')}<button class="btn" data-act="close">Nice</button>`);api('/api/inbox/clear',{}).catch(()=>{})},300)}}
 function renderLogin(){const tab=UI.loginTab||'in';
  main.innerHTML=`<div class="title"><div class="logo">Wild<span>call</span></div><p class="tagline">Collect Wildlings, climb the Trail and duel players around the world. Free to play, always.</p>
   ${UI.loginMsg?`<p class="muted">${UI.loginMsg}</p>`:`<form class="panel authbox" id="authform">
@@ -1594,11 +1608,13 @@ function netPatch(on){if(on&&!NET_ORIG){NET_ORIG={summon,attach,evolve,retreat,p
 let NETMATCH=null,NETPROMPT=null;
 function onNet(m){
  if(m.t==='queued'){RK.queued=true;RK.since=Date.now();if(UI.screen==='ranked')render();return}
+ if(m.t==='chcode'){RK.ch=m.code;RK.queued=false;if(UI.screen==='ranked')render();return}
+ if(m.t==='chgone'){RK.ch=null;if(m.msg)toast(m.msg);if(UI.screen==='ranked')render();return}
  if(m.t==='unqueued'){RK.queued=false;if(m.msg)toast(m.msg);if(UI.screen==='ranked')render();return}
  if(m.t==='err'){toast(m.msg);if(D&&D.net){D.busy=D.turn!==0;render()}return}
- if(m.t==='match'){RK.queued=false;NETMATCH=m;netPatch(true);closeModal();return}
+ if(m.t==='match'){RK.queued=false;RK.ch=null;NETMATCH=m;netPatch(true);closeModal();return}
  if(m.t==='state'){if(!NETMATCH)return;netPatch(true);const prev=D&&D.net?D:null;D=m.view;D.sel=prev&&prev.sel!=null&&D.p[0].hand.some(h=>h.uid===prev.sel)?prev.sel:null;D.snipe=prev?prev.snipe:null;
-  const o=NETMATCH.opp||{};D.oppInfo=o.bot?`Bot · ${o.title||'practice'}`:`Rating ${o.rating||'?'}${NETMATCH.stake?` · Stakes ${NETMATCH.stake}`:''}`;D.oppSig=o.sig||'zapkit';D.deadline=m.ms!=null?Date.now()+m.ms:null;
+  const o=NETMATCH.opp||{};D.oppInfo=o.bot?`Bot · ${o.title||'practice'}`:o.friendly?`Friendly · rating ${o.rating||'?'}`:`Rating ${o.rating||'?'}${NETMATCH.stake?` · Stakes ${NETMATCH.stake}`:''}`;D.oppSig=o.sig||'zapkit';D.deadline=m.ms!=null?Date.now()+m.ms:null;
   LOG=m.view.log||[];FXQ=(m.fx||[]).slice();if(UI.screen!=='duel'){UI.screen='duel'}render();flushFx();return}
  if(m.t==='prompt'){if(NETPROMPT)return;NETPROMPT=m.id;promptChoice(m.title,m.sub,m.opts).then(val=>{wsSend({t:'choice',id:m.id,val});NETPROMPT=null});return}
  if(m.t==='promptgone'){if(NETPROMPT===m.id){NETPROMPT=null;CHOICE=null;closeModal()}return}
@@ -1609,7 +1625,7 @@ setInterval(()=>{const el=document.getElementById('nettimer');if(el&&D&&D.deadli
  const q=document.getElementById('qtime');if(q&&RK.queued)q.textContent=Math.floor((Date.now()-RK.since)/1000)+'s'},500);
 function legalDecks(){return SAVE.decks.map((d,i)=>({d,i})).filter(x=>!deckProblems(x.d.cards).length)}
 async function loadRanked(){try{const [b,me]=await Promise.all([api('/api/leaderboard'),api('/api/ranked/me')]);RK.board=b.rows;RK.me=me;if(UI.screen==='ranked')render()}catch(e){netErr(e)}}
-function renderRanked(){if(!RK.board){RK.board=[];loadRanked()}const me=RK.me||{};const st=(SHOPCFG.stakes)||{};const legal=legalDecks();if(RK.deck==null||!legal.some(x=>x.i===RK.deck))RK.deck=legal.length?(legal.some(x=>x.i===SAVE.active)?SAVE.active:legal[0].i):null;
+function renderRanked(){wsOpen();if(!RK.board){RK.board=[];loadRanked()}const me=RK.me||{};const st=(SHOPCFG.stakes)||{};const legal=legalDecks();if(RK.deck==null||!legal.some(x=>x.i===RK.deck))RK.deck=legal.length?(legal.some(x=>x.i===SAVE.active)?SAVE.active:legal[0].i):null;
  const canStake=st.enabled&&me.stakesAllowed;const stakes=[0,...(st.options||[50,100,250,500]).filter(v=>v<=(st.max||500))];
  main.innerHTML=`<div class="screen"><div class="wrap">${nav('Ranked')}
   <div class="panel rk-head"><div class="rk-rating"><span class="eyebrow">Your rating</span><b>${ACCOUNT.rating}</b><span class="muted">${ACCOUNT.wins||0} W · ${ACCOUNT.losses||0} L${me.rank?` · #${me.rank}`:''}</span></div>
@@ -1621,6 +1637,9 @@ function renderRanked(){if(!RK.board){RK.board=[];loadRanked()}const me=RK.me||{
     ${RK.queued?`<div class="row"><span class="chip daily">Searching for an opponent · <b id="qtime">0s</b></span><button class="btn ghost" data-act="rkcancel">Cancel</button></div>${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)!==0&&!RK.stake?`<span class="muted" style="font-size:12px">No one around? After ${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)||30}s you'll play a bot instead (no rating change, smaller rewards).</span>`:''}`
      :`<button class="btn gold" data-act="rkqueue" ${legal.length?'':'disabled'}>Find a match</button>`}
    </div></div>
+  <div class="panel rk-friend"><div style="flex:1;min-width:240px"><h3>Play a friend</h3><span class="muted" style="font-size:13px">Unrated, no rewards. Create a code and send it (or the link) to a friend, or enter theirs. Uses the deck picked above.</span></div>
+   ${RK.ch?`<div class="rk-code"><span class="eyebrow">Your code</span><b class="code">${RK.ch}</b><div class="row"><button class="btn sm" data-act="chcopy">Copy link</button><button class="btn ghost sm" data-act="chcancel">Cancel</button></div><span class="muted" style="font-size:12px">Waiting for your friend to join…</span></div>`
+    :`<div class="row" style="align-items:flex-end"><button class="btn" data-act="chcreate" ${legal.length&&!RK.queued?'':'disabled'}>Create a challenge</button><label class="rk-row"><span class="eyebrow">Friend's code</span><input id="chcode" class="atext" maxlength="8" placeholder="ABC123" value="${esc(RK.joinCode||'')}" style="width:140px;text-transform:uppercase"></label><button class="btn ghost" data-act="chjoin" ${legal.length&&!RK.queued?'':'disabled'}>Join</button></div>`}</div>
   <div class="rk-cols"><div class="panel"><h3>Leaderboard</h3><div class="rk-table">${(RK.board||[]).map((r,i)=>`<div class="rk-tr${r.username===ACCOUNT.username?' me':''}"><span>${i+1}</span><b>${esc(r.username)}</b><span>${r.rating}</span><span class="muted">${r.wins}-${r.losses}</span></div>`).join('')||'<p class="muted">No ranked games yet. Be the first.</p>'}</div></div>
    <div class="panel"><h3>Recent matches</h3><div class="rk-table">${(me.history||[]).map(h=>`<div class="rk-tr"><span class="${h.won?'beat':'lost'}">${h.won?'W':'L'}</span><b>${esc(h.opp)}</b><span>${h.delta>0?'+':''}${h.delta}</span><span class="muted">${h.stake?'⚑ '+h.stake:''}</span></div>`).join('')||'<p class="muted">Your ranked matches will show here.</p>'}</div>
    <p class="muted" style="font-size:12px">Win: +${(SHOPCFG.pvp&&SHOPCFG.pvp.win)||60} coins · Loss: +${(SHOPCFG.pvp&&SHOPCFG.pvp.loss)||15} coins · First win each day: +${(SHOPCFG.pvp&&SHOPCFG.pvp.dailyCoins)||100} coins and a pack. Turns time out after ${(SHOPCFG.pvp&&SHOPCFG.pvp.turnSecs)||75}s.</p></div></div>
@@ -1636,12 +1655,31 @@ function renderPvpResult(){const m=UI.pvp||{};const won=m.won;
  main.innerHTML=`<div class="title"><div class="eyebrow" style="color:${won?'var(--good)':'var(--heart)'}">${won?'Victory':'Defeat'}</div>
   <h1 style="font-size:clamp(34px,7vw,56px)">${won?`You beat ${esc(m.oppName||'your opponent')}!`:`${esc(m.oppName||'Your opponent')} wins`}</h1>
   <p class="tagline">${m.reason?esc(m.reason):''}</p>
-  <div class="row" style="justify-content:center">${m.bot?'<span class="coins">Bot match · rating unchanged</span>':`<span class="coins">Rating ${m.ratingBefore} → <b>${m.ratingAfter}</b> (${m.ratingAfter-m.ratingBefore>=0?'+':''}${m.ratingAfter-m.ratingBefore})</span>`}<span class="coins">+${m.coins||0} coins${m.packs?` · +${m.packs} pack`:''}</span>${m.stake?`<span class="coins">Stakes ${won?'+':'−'}${m.stake}</span>`:''}</div>
-  <div class="row" style="justify-content:center"><button class="btn gold" data-act="ranked">Play again</button><button class="btn ghost" data-act="home">Home</button></div></div>`}
+  <div class="row" style="justify-content:center">${m.friendly?'<span class="coins">Friendly match · no rating change or rewards</span>':m.bot?'<span class="coins">Bot match · rating unchanged</span>':`<span class="coins">Rating ${m.ratingBefore} → <b>${m.ratingAfter}</b> (${m.ratingAfter-m.ratingBefore>=0?'+':''}${m.ratingAfter-m.ratingBefore})</span>`}<span class="coins">+${m.coins||0} coins${m.packs?` · +${m.packs} pack`:''}</span>${m.stake?`<span class="coins">Stakes ${won?'+':'−'}${m.stake}</span>`:''}</div>
+  <div class="row" style="justify-content:center"><button class="btn gold" data-act="ranked">${m.friendly?'Back to duels':'Play again'}</button><button class="btn ghost" data-act="home">Home</button></div></div>`}
 
 /* ---- admin ---- */
 let ADM={cfg:null,users:null,q:''};
-async function loadAdmin(){try{const j=await api('/api/admin/config');ADM.cfg=j.cfg;if(UI.screen==='admin')render()}catch(e){netErr(e)}}
+
+function renderAdmUser(){const P=ADM.player;if(!P){main.innerHTML=`<div class="screen"><div class="wrap">${nav('Player')}<p class="muted">Loading…</p></div></div>`;return}
+ const u=P.user,sv=P.save,st=(sv&&sv.stats)||{};const f=(k,v,t='number')=>`<label>${k}<input class="atext" data-f="${k.toLowerCase().replace(/ /g,'')}" type="${t}" value="${esc(v??'')}"></label>`;
+ main.innerHTML=`<div class="screen"><div class="wrap"><div class="topnav"><button class="btn ghost sm" data-act="admback">← Admin</button><h2>${esc(u.username)}</h2>${u.admin?'<span class="trial">admin</span>':''}${u.banned?'<span class="trial" style="background:var(--heart)">banned</span>':''}<span class="muted" style="margin-left:auto">Player #${u.id} · joined ${new Date(u.created).toLocaleDateString()} · last seen ${u.lastSeen?new Date(u.lastSeen).toLocaleString():'never'}</span></div>
+  <div class="adm-cols">
+   <div class="panel"><h3>Edit</h3><div class="aform">${f('Username',u.username,'text')}${f('Email',u.email,'email')}${f('Rating',u.rating)}${sv?f('Coins',sv.coins)+f('Packs',sv.packs)+f('Premium',sv.premium)+f('Apex',sv.apex):''}
+    <label>New password<input class="atext" data-f="password" type="text" placeholder="Leave blank to keep" autocomplete="off"></label>
+    <label class="chk"><input type="checkbox" data-f="admin" ${u.admin?'checked':''}> Admin</label><label class="chk"><input type="checkbox" data-f="banned" ${u.banned?'checked':''}> Banned</label></div>
+    <button class="btn gold" data-act="admusave">Save changes</button><span class="muted" style="font-size:12px">Setting a new password signs them out everywhere.</span></div>
+   <div class="panel"><h3>Award</h3><div class="aform"><label>Coins<input class="atext" id="aw_c" type="number" placeholder="e.g. 500 (negative removes)"></label><label>Booster Packs<input class="atext" id="aw_p" type="number"></label><label>Premium Packs<input class="atext" id="aw_q" type="number"></label><label>Apex Packs<input class="atext" id="aw_x" type="number"></label></div>
+    <input id="aw_n" class="atext" maxlength="120" placeholder="Note to the player (optional)"><button class="btn" data-act="admuaward">Award</button></div>
+  </div>
+  ${sv?`<div class="panel"><h3>Save</h3><div class="adm-kv"><span>Name in story</span><b>${esc(sv.name||'')}</b><span>Story</span><b>${sv.beaten} / ${sv.rivals} rivals beaten</b><span>Collection</span><b>${sv.uniq} different · ${sv.cards} cards</b><span>Coins from extras</span><b>${sv.convTotal}</b>
+    <span>Duels won</span><b>${st.wins||0}</b><span>Ranked</span><b>${u.wins}–${u.losses} · ${st.pvpGames||0} played incl. bots</b><span>Knockouts</span><b>${st.kos||0}</b><span>Packs opened</span><b>${st.packs||0}</b><span>Stakes</span><b>${u.settings&&u.settings.stakesOptIn?'opted in · '+(u.settings.country||'no country'):'off'}</b></div>
+    <h4>Decks</h4><div class="row">${sv.decks.map(d=>`<span class="chip">${esc(d.name)} · ${d.size}${d.legal?'':' · not legal'}</span>`).join('')}</div></div>`:'<div class="panel"><p class="muted">This player hasn\'t picked a starter deck yet.</p></div>'}
+  <div class="adm-cols"><div class="panel"><h3>Recent matches</h3><div class="rk-table">${P.matches.map(m=>`<div class="rk-tr"><span class="${m.won?'beat':'lost'}">${m.won?'W':'L'}</span><b>${esc(m.opp)}</b><span>${m.kind==='ranked'?(m.delta>0?'+':'')+m.delta:m.kind}</span><span class="muted">${new Date(m.when).toLocaleDateString()}</span></div>`).join('')||'<p class="muted">None yet.</p>'}</div></div>
+   <div class="panel"><h3>Admin history</h3><div class="rk-table">${P.audit.map(a=>`<div class="adm-log"><b>${esc(a.action)}</b> by ${esc(a.by||'?')} <span class="muted">${new Date(a.created_at).toLocaleString()}</span><br><code>${esc(JSON.stringify(a.detail.changes||a.detail))}</code></div>`).join('')||'<p class="muted">No admin changes.</p>'}</div></div></div>
+ </div></div>`}
+async function openPlayer(id){ADM.player=null;ADM.pid=id;UI.screen='admuser';render();try{ADM.player=await api('/api/admin/user/'+id);render()}catch(e){netErr(e)}}
+async function loadAdmin(){try{const [j,u]=await Promise.all([api('/api/admin/config'),api('/api/admin/users?q='+encodeURIComponent(ADM.q||''))]);ADM.cfg=j.cfg;ADM.users=u.rows;ADM.total=u.total;if(UI.screen==='admin')render()}catch(e){netErr(e)}}
 function renderAdmin(){if(!ADM.cfg){main.innerHTML=`<div class="screen"><div class="wrap">${nav('Admin')}<p class="muted">Loading…</p></div></div>`;loadAdmin();return}
  const c=ADM.cfg;const pr=c.prices||{},sale=c.sale||{},dis=c.disabled||[],mk=c.market||{},st=c.stakes||{},pvp=c.pvp||{},caps=c.caps||{};
  const num=(id,v,ph)=>`<input class="anum" data-k="${id}" type="number" min="0" value="${v??''}" placeholder="${ph??''}">`;
@@ -1658,9 +1696,11 @@ function renderAdmin(){if(!ADM.cfg){main.innerHTML=`<div class="screen"><div cla
    <label class="rk-row"><span class="eyebrow">Blocked countries (ISO codes, comma separated)</span><input id="ablock" class="atext" value="${esc((st.blocked||['BE','NL','CN']).join(', '))}"></label></div>
   <div class="row"><button class="btn gold" data-act="admsave">Save settings</button><span class="muted" id="admmsg"></span></div>
   <div class="panel"><h3>Season</h3><p class="muted" style="font-size:13px">Ending the season pays everyone by leaderboard position (1st: 3000 coins + 10 packs · top 10: 1500 + 5 · top 100: 500 + 2 · 5+ games: 200 + 1), resets win/loss records and moves every rating halfway back to 1000.</p><button class="btn ghost" data-act="admseason">End the season now</button></div>
-  <div class="panel"><h3>Players</h3><div class="row"><input id="aq" class="atext" style="flex:1" placeholder="Search username or email" value="${esc(ADM.q)}"><button class="btn sm" data-act="admsearch">Search</button></div>
-   <div class="rk-table">${(ADM.users||[]).map(u=>`<div class="adm-user"><div style="flex:1;min-width:180px"><b>${esc(u.username)}</b>${u.admin?' <span class="trial">admin</span>':''}${u.banned?' <span class="trial" style="background:var(--heart)">banned</span>':''}<br><span class="muted" style="font-size:12px">${esc(u.email)} · ${u.coins} coins · ${u.packs} packs · rating ${u.rating}</span></div>
-    <input class="anum" id="gc${u.id}" type="number" placeholder="coins"><input class="anum" id="gp${u.id}" type="number" placeholder="packs"><button class="btn sm" data-act="admgrant" data-id="${u.id}">Grant</button><button class="btn sm ghost" data-act="admban" data-id="${u.id}" data-b="${u.banned?0:1}">${u.banned?'Unban':'Ban'}</button></div>`).join('')||'<p class="muted">Search to find players.</p>'}</div></div>
+  <div class="panel"><h3>Award everyone</h3><p class="muted" style="font-size:13px">Gives every active player the same reward, e.g. for an event or an apology for downtime. The note is shown to them next time they open the game.</p>
+   <div class="agrid"><label>Coins <input class="anum" id="awc_all" type="number"></label><label>Booster Packs <input class="anum" id="awp_all" type="number"></label><label>Premium Packs <input class="anum" id="awq_all" type="number"></label><label>Apex Packs <input class="anum" id="awx_all" type="number"></label></div>
+   <input id="awn_all" class="atext" maxlength="120" placeholder="Note to players (optional)"><button class="btn sm gold" data-act="admawardall" style="align-self:flex-start">Award all players</button></div>
+  <div class="panel"><h3>Players ${ADM.total!=null?`<span class="muted" style="font-size:14px;font-weight:500">· ${ADM.total} total</span>`:''}</h3><div class="row"><input id="aq" class="atext" style="flex:1" placeholder="Search username or email (blank = newest players)" value="${esc(ADM.q)}"><button class="btn sm" data-act="admsearch">Search</button></div>
+   <div class="adm-table">${ADM.users?`<div class="adm-tr head"><span>Player</span><span>Coins</span><span>Packs</span><span>Rating</span><span>W–L</span><span>Status</span></div>`+ADM.users.map(u=>`<button class="adm-tr" data-act="admopen" data-id="${u.id}"><span><b>${esc(u.username)}</b><small>${esc(u.email)}</small></span><span>${u.coins}</span><span>${u.packs}</span><span>${u.rating}</span><span>${u.wins}–${u.losses}</span><span>${u.admin?'<span class="trial">admin</span> ':''}${u.banned?'<span class="trial" style="background:var(--heart)">banned</span>':''}</span></button>`).join(''):'<p class="muted">Search to list players.</p>'}</div></div>
  </div></div>`;
  const mi=$('#amkt');if(mi){const up=()=>{const ids=mi.value.split(/[\s,]+/).filter(Boolean);$('#amktnames').textContent=ids.map(id=>C[id]?C[id].n:`✗ ${id}`).join(', ')};mi.addEventListener('input',up);up()}}
 function adminCollect(){const c=JSON.parse(JSON.stringify(ADM.cfg||{}));document.querySelectorAll('.anum[data-k]').forEach(el=>{const path=el.dataset.k.split('.');let o=c;for(let i=0;i<path.length-1;i++){o[path[i]]=o[path[i]]||{};o=o[path[i]]}const v=el.value.trim();if(v==='')delete o[path[path.length-1]];else o[path[path.length-1]]=Math.max(0,+v)});
@@ -1669,7 +1709,13 @@ function adminCollect(){const c=JSON.parse(JSON.stringify(ADM.cfg||{}));document
  c.stakes=c.stakes||{};c.stakes.enabled=$('#astk').checked;c.stakes.blocked=$('#ablock').value.split(/[\s,]+/).map(x=>x.toUpperCase()).filter(x=>/^[A-Z]{2}$/.test(x));return c}
 async function adminAct(a,ds){try{
  if(a==='admsave'){const j=await api('/api/admin/config',adminCollect(),'PUT');ADM.cfg=j.cfg;SHOPCFG=j.public||SHOPCFG;render();toast('Settings saved. Players see them right away.')}
- if(a==='admsearch'){ADM.q=$('#aq').value.trim();const j=await api('/api/admin/users?q='+encodeURIComponent(ADM.q));ADM.users=j.rows;render()}
+ if(a==='admsearch'){ADM.q=$('#aq').value.trim();const j=await api('/api/admin/users?q='+encodeURIComponent(ADM.q));ADM.users=j.rows;ADM.total=j.total;render()}
+ if(a==='admawardall'){const v=id=>+($(id).value||0);const body={all:true,coins:v('#awc_all'),packs:v('#awp_all'),premium:v('#awq_all'),apex:v('#awx_all'),note:$('#awn_all').value.trim()};
+  if(!MODAL||MODAL.dataset.confirm!=='awall'){const m=modal(`<h2>Award every player?</h2><p class="muted">${[body.coins&&body.coins+' coins',body.packs&&body.packs+' Booster Packs',body.premium&&body.premium+' Premium Packs',body.apex&&body.apex+' Apex Packs'].filter(Boolean).join(', ')||'Nothing'} to every active player.</p><div class="row"><button class="btn gold" data-act="admawardall">Award all</button><button class="btn ghost" data-act="close">Cancel</button></div>`);m.dataset.confirm='awall';ADM.pendAll=body;return}
+  closeModal();const j=await api('/api/admin/award',ADM.pendAll||body);toast(`Awarded to ${j.players} players.`)}
+ if(a==='admusave'){const b={};document.querySelectorAll('[data-f]').forEach(el=>{const k=el.dataset.f;b[k]=el.type==='checkbox'?el.checked:el.value.trim()});if(!b.password)delete b.password;
+  const j=await api('/api/admin/user/'+ADM.pid,b,'PUT');toast(Object.keys(j.changes).length?'Saved: '+Object.keys(j.changes).join(', '):'No changes.');openPlayer(ADM.pid)}
+ if(a==='admuaward'){const v=id=>+($(id).value||0);const j=await api('/api/admin/award',{id:ADM.pid,coins:v('#aw_c'),packs:v('#aw_p'),premium:v('#aw_q'),apex:v('#aw_x'),note:$('#aw_n').value.trim()});toast('Awarded.');openPlayer(ADM.pid)}
  if(a==='admgrant'){const id=+ds.id;const coins=+($('#gc'+id).value||0),packs=+($('#gp'+id).value||0);const j=await api('/api/admin/grant',{id,coins,packs});toast(`Granted to ${j.username}.`);const k=await api('/api/admin/users?q='+encodeURIComponent(ADM.q));ADM.users=k.rows;render()}
  if(a==='admseason'){const j=await api('/api/admin/season/end',{});toast(`Season ended. Paid ${j.paid} of ${j.players} ranked players.`)}
  if(a==='admban'){await api('/api/admin/ban',{id:+ds.id,banned:ds.b==='1'});const k=await api('/api/admin/users?q='+encodeURIComponent(ADM.q));ADM.users=k.rows;render()}
@@ -2121,7 +2167,7 @@ function render(){
  if(NET&&NET.server){NET.dirty&&NET.dirty();return}
  if(SIM)return;
  const s=UI.screen;
- ({login:renderLogin,ranked:renderRanked,pvpresult:renderPvpResult,admin:renderAdmin,gallery:renderGallery,haul:renderHaul,title:renderTitle,starter:renderStarter,ladder:renderLadder,talk:renderTalk,bounties:renderBounties,duel:renderDuel,result:renderResult,shop:renderShop,pack:renderPack,binder:renderBinder,decks:renderDecks,edit:renderEdit}[s])();
+ ({admuser:renderAdmUser,login:renderLogin,ranked:renderRanked,pvpresult:renderPvpResult,admin:renderAdmin,gallery:renderGallery,haul:renderHaul,title:renderTitle,starter:renderStarter,ladder:renderLadder,talk:renderTalk,bounties:renderBounties,duel:renderDuel,result:renderResult,shop:renderShop,pack:renderPack,binder:renderBinder,decks:renderDecks,edit:renderEdit}[s])();
 }
 function coinsHTML(){return `<span class="coins"><i></i>${SAVE.coins}</span>`}
 function nav(title){return `<div class="topnav"><button class="btn ghost sm" data-act="home">← Home</button><h2>${title}</h2>${coinsHTML()}</div>`}
@@ -2544,10 +2590,16 @@ document.addEventListener('click',async ev=>{
   case 'ranked':closeModal();RK.board=null;UI.screen='ranked';render();break;
   case 'rkqueue':{const st=$('#rkstake');RK.stake=st?+st.value:0;wsSend({t:'queue',deck:RK.deck,stake:RK.stake});break}
   case 'rkcancel':wsSend({t:'cancel'});RK.queued=false;render();break;
+  case 'chcreate':wsSend({t:'chcreate',deck:RK.deck});break;
+  case 'chcancel':wsSend({t:'chcancel'});RK.ch=null;render();break;
+  case 'chjoin':{const c=($('#chcode').value||'').trim().toUpperCase();if(c.length<4){toast('Enter your friend\'s code.');break}RK.joinCode=c;wsSend({t:'chjoin',code:c,deck:RK.deck});break}
+  case 'chcopy':{const link=location.origin+'/?c='+RK.ch;try{await navigator.clipboard.writeText(link);toast('Link copied. Send it to your friend.')}catch(x){prompt('Copy this link:',link)}break}
   case 'rkstakeset':stakeSettings();break;
   case 'rkstakesave':{try{const j=await api('/api/settings',{country:$('#stcountry').value,stakesOptIn:$('#stadult').checked});RK.me=Object.assign(RK.me||{},j);closeModal();render()}catch(x){netErr(x)}break}
   case 'admin':closeModal();ADM.cfg=null;UI.screen='admin';render();break;
-  case 'admsave':case 'admsearch':case 'admgrant':case 'admban':adminAct(a,ds);break;
+  case 'admsave':case 'admsearch':case 'admgrant':case 'admban':case 'admawardall':case 'admusave':case 'admuaward':adminAct(a,ds);break;
+  case 'admopen':openPlayer(+ds.id);break;
+  case 'admback':UI.screen='admin';render();break;
   case 'admseason':if(MODAL&&MODAL.dataset.confirm==='season'){closeModal();adminAct(a,ds)}else{const m=modal(`<h2>End the season?</h2><p class="muted">This pays out season rewards and resets ratings. It can't be undone.</p><div class="row"><button class="btn" data-act="admseason">End season</button><button class="btn ghost" data-act="close">Cancel</button></div>`);m.dataset.confirm='season'}break;
   case 'swap':{if(!D||D.turn!==0||D.busy||D.p[0].swapUsed)break;const me=D.p[0];let uid=D.sel;
     if(uid==null||!me.hand.some(h=>h.uid===uid)){uid=await promptChoice('Swap a card','Put it on the bottom of your deck, then draw 1',[...me.hand.map(h=>({...cardOpt(h.id),val:h.uid})),{label:'Cancel',sub:'Keep your hand',val:null}]);closeModal()}

@@ -59,7 +59,7 @@ app.post('/api/login',async(req,res,next)=>{try{
   if(ADMINS.includes(u.uname)&&!u.admin){await sql(`update users set admin=true where id=$1`,[u.id]);u.admin=true}
   await sql(`update users set last_seen=now() where id=$1`,[u.id]);await startSession(res,u.id);res.json(mePayload(u))}catch(e){next(e)}});
 app.post('/api/logout',async(req,res)=>{const tok=parseCookies(req.headers.cookie).wc_sess;if(tok)await sql(`delete from sessions where token=$1`,[tok]).catch(()=>{});res.setHeader('Set-Cookie','wc_sess=; Path=/; Max-Age=0');res.json({ok:true})});
-app.get('/api/me',auth,async(req,res,next)=>{try{let u=req.user;
+app.get('/api/me',auth,async(req,res,next)=>{try{let u=req.user;sql(`update users set last_seen=now() where id=$1`,[u.id]).catch(()=>{});
   if(u.save&&!u.save.capV){u=await lockUser(u.id,async()=>{const x=await loadUser(u.id);if(x.save&&!x.save.capV){const r=withSave(x.save,getCfg(),()=>null);const note=r.save.capNote;delete r.save.capNote;await saveUser(x.id,r.save);x.save=note?{...r.save,capNote:note}:r.save}return x})}
   res.json(mePayload(u))}catch(e){next(e)}});
 
@@ -121,7 +121,7 @@ app.get('/api/leaderboard',async(req,res,next)=>{try{res.json({rows:await sql(`s
 app.get('/api/ranked/me',auth,async(req,res,next)=>{try{const u=req.user;
   const rank=u.wins+u.losses>0?(await sql(`select count(*)::int+1 as r from users where banned=false and wins+losses>0 and rating>$1`,[u.rating]))[0].r:null;
   const h=await sql(`select m.*,a.username as n1,b.username as n2 from matches m left join users a on a.id=m.p1 left join users b on b.id=m.p2 where m.p1=$1 or m.p2=$1 order by m.id desc limit 10`,[u.id]);
-  const history=h.map(m=>{const me1=m.p1===u.id;return {won:m.winner===u.id,opp:(me1?m.n2:m.n1)||(m.reason&&m.reason.startsWith('bot:')?m.reason.slice(4)+' (bot)':'?'),delta:me1?m.r1_after-m.r1_before:m.r2_after-m.r2_before,stake:m.stake}});
+  const history=h.map(m=>{const me1=m.p1===u.id;return {won:m.winner===u.id,opp:((me1?m.n2:m.n1)||(m.reason&&m.reason.startsWith('bot:')?m.reason.slice(4)+' (bot)':'?'))+(m.reason==='friendly'?' · friendly':''),delta:me1?m.r1_after-m.r1_before:m.r2_after-m.r2_before,stake:m.stake}});
   res.json({rank,history,...stakeStatus(u)})}catch(e){next(e)}});
 app.post('/api/settings',auth,async(req,res,next)=>{try{const b=req.body||{};const s={...(req.user.settings||{})};
   if(typeof b.country==='string'&&/^([A-Z]{2})?$/.test(b.country))s.country=b.country;if(typeof b.stakesOptIn==='boolean')s.stakesOptIn=b.stakesOptIn;
@@ -145,12 +145,52 @@ app.put('/api/admin/config',auth,adminOnly,async(req,res,next)=>{try{const b=req
   await sql(`insert into audit(admin_id,action,detail) values($1,'config',$2)`,[req.user.id,JSON.stringify(clean)]);
   setCfg(clean);res.json({cfg:getCfg(),public:getCfg()})}catch(e){next(e)}});
 app.get('/api/admin/users',auth,adminOnly,async(req,res,next)=>{try{const q='%'+String(req.query.q||'').toLowerCase()+'%';
-  const rows=await sql(`select id,username,email,admin,banned,rating,save from users where uname like $1 or email like $1 order by id desc limit 50`,[q]);
-  res.json({rows:rows.map(u=>({id:u.id,username:u.username,email:u.email,admin:u.admin,banned:u.banned,rating:u.rating,coins:u.save?u.save.coins:0,packs:u.save?u.save.packs:0}))})}catch(e){next(e)}});
+  const rows=await sql(`select id,username,email,admin,banned,rating,wins,losses,save,created_at,last_seen from users where uname like $1 or email like $1 order by id desc limit 100`,[q]);
+  const total=(await sql(`select count(*)::int as n from users`))[0].n;
+  res.json({total,rows:rows.map(u=>({id:u.id,username:u.username,email:u.email,admin:u.admin,banned:u.banned,rating:u.rating,wins:u.wins,losses:u.losses,coins:u.save?u.save.coins:0,packs:u.save?u.save.packs:0,created:u.created_at,lastSeen:u.last_seen}))})}catch(e){next(e)}});
+app.get('/api/admin/user/:id',auth,adminOnly,async(req,res,next)=>{try{const u=await loadUser(+req.params.id);if(!u)return bad(res,404,'No such player.');
+  const S=rules();const sv=u.save||null;
+  const summary=sv&&{coins:sv.coins,packs:sv.packs,premium:(sv.special||{}).premium||0,apex:(sv.special||{}).apex||0,uniq:Object.keys(sv.coll||{}).filter(id=>S.C[id]&&sv.coll[id]>0).length,cards:Object.values(sv.coll||{}).reduce((a,b)=>a+b,0),
+    decks:(sv.decks||[]).map(d=>({name:d.name,size:d.cards.length,legal:!S.deckProblems(d.cards).length})),beaten:(sv.beaten||[]).length,rivals:S.RIVALS.length,stats:sv.stats||{},name:sv.name,convTotal:sv.convTotal||0};
+  const m=await sql(`select m.*,a.username as n1,b.username as n2 from matches m left join users a on a.id=m.p1 left join users b on b.id=m.p2 where m.p1=$1 or m.p2=$1 order by m.id desc limit 15`,[u.id]);
+  const audit=await sql(`select a.action,a.detail,a.created_at,x.username as by from audit a left join users x on x.id=a.admin_id where (a.detail->>'id')::text=$1 order by a.id desc limit 20`,[String(u.id)]);
+  res.json({user:{id:u.id,username:u.username,email:u.email,admin:u.admin,banned:u.banned,rating:u.rating,wins:u.wins,losses:u.losses,created:u.created_at,lastSeen:u.last_seen,settings:u.settings},save:summary,
+    matches:m.map(x=>{const me1=x.p1===u.id;return {when:x.created_at,won:x.winner===u.id,opp:(me1?x.n2:x.n1)||(x.reason&&x.reason.startsWith('bot:')?x.reason.slice(4)+' (bot)':x.reason==='friendly'?'friend':'?'),delta:me1?x.r1_after-x.r1_before:x.r2_after-x.r2_before,stake:x.stake,turns:x.turns,kind:x.reason&&x.reason.startsWith('bot:')?'bot':x.reason==='friendly'?'friendly':'ranked'}}),audit})}catch(e){next(e)}});
+app.put('/api/admin/user/:id',auth,adminOnly,async(req,res,next)=>{try{const id=+req.params.id;const b=req.body||{};const changes={};
+  const out=await lockUser(id,async()=>{const u=await loadUser(id);if(!u)throw Object.assign(new Error('No such player.'),{code:404});
+    if(b.username!=null&&b.username!==u.username){const un=String(b.username).trim();if(!/^[A-Za-z0-9_]{3,16}$/.test(un))throw Object.assign(new Error('Usernames are 3–16 letters, numbers or underscores.'),{code:400});
+      if((await sql(`select 1 from users where uname=$1 and id<>$2`,[un.toLowerCase(),id])).length)throw Object.assign(new Error('That username is taken.'),{code:409});
+      await sql(`update users set username=$2,uname=$3 where id=$1`,[id,un,un.toLowerCase()]);changes.username=un}
+    if(b.email!=null&&b.email!==u.email){const em=String(b.email).trim().toLowerCase();if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em))throw Object.assign(new Error('Enter a valid email.'),{code:400});
+      if((await sql(`select 1 from users where email=$1 and id<>$2`,[em,id])).length)throw Object.assign(new Error('That email is in use.'),{code:409});
+      await sql(`update users set email=$2 where id=$1`,[id,em]);changes.email=em}
+    if(b.rating!=null){const r=Math.max(100,Math.min(5000,Math.round(+b.rating)||1000));if(r!==u.rating){await sql(`update users set rating=$2 where id=$1`,[id,r]);changes.rating=r}}
+    if(b.admin!=null&&!!b.admin!==u.admin){if(id===req.user.id)throw Object.assign(new Error('You can\'t remove your own admin access.'),{code:400});await sql(`update users set admin=$2 where id=$1`,[id,!!b.admin]);changes.admin=!!b.admin}
+    if(b.banned!=null&&!!b.banned!==u.banned){if(id===req.user.id)throw Object.assign(new Error('You can\'t ban yourself.'),{code:400});await sql(`update users set banned=$2 where id=$1`,[id,!!b.banned]);if(b.banned)await sql(`delete from sessions where user_id=$1`,[id]);changes.banned=!!b.banned}
+    if(b.password){const pw=String(b.password);if(pw.length<8)throw Object.assign(new Error('Passwords need at least 8 characters.'),{code:400});await sql(`update users set pass=$2 where id=$1`,[id,await bcrypt.hash(pw,10)]);await sql(`delete from sessions where user_id=$1`,[id]);changes.password='reset'}
+    if(u.save){const sv=u.save;let touched=false;const setN=(k,v)=>{if(v==null||v==='')return;const n=Math.max(0,Math.min(1e9,Math.round(+v)||0));return n};
+      const c=setN('coins',b.coins);if(c!=null&&c!==sv.coins){changes.coins=[sv.coins,c];sv.coins=c;touched=true}
+      const pk=setN('packs',b.packs);if(pk!=null&&pk!==sv.packs){changes.packs=[sv.packs,pk];sv.packs=pk;touched=true}
+      sv.special=sv.special||{premium:0,apex:0};for(const k of ['premium','apex']){const v=setN(k,b[k]);if(v!=null&&v!==(sv.special[k]||0)){changes[k]=[sv.special[k]||0,v];sv.special[k]=v;touched=true}}
+      if(touched)await saveUser(id,sv)}
+    return changes});
+  if(Object.keys(out).length)await sql(`insert into audit(admin_id,action,detail) values($1,'edit',$2)`,[req.user.id,JSON.stringify({id,changes:out})]);
+  res.json({ok:true,changes:out})}catch(e){if(e.code)return bad(res,e.code,e.message);next(e)}});
+// award coins / packs to one player or to everyone (e.g. an event or an apology)
+app.post('/api/admin/award',auth,adminOnly,async(req,res,next)=>{try{const b=req.body||{};
+  const n=v=>Math.max(-1e7,Math.min(1e7,Math.round(+v||0)));const coins=n(b.coins),packs=n(b.packs),premium=n(b.premium),apex=n(b.apex);const note=String(b.note||'').slice(0,120);
+  if(!coins&&!packs&&!premium&&!apex)return bad(res,400,'Nothing to award.');
+  const ids=b.all?(await sql(`select id from users where banned=false and save is not null`)).map(r=>r.id):[+b.id];
+  let done=0;for(const id of ids){await lockUser(id,async()=>{const u=await loadUser(id);if(!u||!u.save)return;const sv=u.save;sv.coins=Math.max(0,sv.coins+coins);sv.packs=Math.max(0,sv.packs+packs);
+    sv.special=sv.special||{premium:0,apex:0};sv.special.premium=Math.max(0,(sv.special.premium||0)+premium);sv.special.apex=Math.max(0,(sv.special.apex||0)+apex);
+    if(note)sv.inbox=[...(sv.inbox||[]),{note,coins,packs,premium,apex,at:Date.now()}].slice(-10);await saveUser(id,sv);done++})}
+  await sql(`insert into audit(admin_id,action,detail) values($1,'award',$2)`,[req.user.id,JSON.stringify({id:b.all?'all':+b.id,coins,packs,premium,apex,note,players:done})]);
+  res.json({ok:true,players:done})}catch(e){next(e)}});
 app.post('/api/admin/grant',auth,adminOnly,async(req,res,next)=>{try{const id=+req.body.id,coins=Math.round(+req.body.coins||0),packs=Math.round(+req.body.packs||0);
   const u=await lockUser(id,async()=>{const u=await loadUser(id);if(!u||!u.save)throw Object.assign(new Error('That player has no save yet.'),{code:400});
     u.save.coins=Math.max(0,u.save.coins+coins);u.save.packs=Math.max(0,u.save.packs+packs);await saveUser(id,u.save);return u});
   await sql(`insert into audit(admin_id,action,detail) values($1,'grant',$2)`,[req.user.id,JSON.stringify({id,coins,packs})]);res.json({ok:true,username:u.username})}catch(e){if(e.code)return bad(res,e.code,e.message);next(e)}});
+app.post('/api/inbox/clear',auth,async(req,res,next)=>{try{await lockUser(req.user.id,async()=>{const u=await loadUser(req.user.id);if(u.save&&u.save.inbox){delete u.save.inbox;await saveUser(u.id,u.save)}});res.json({ok:true})}catch(e){next(e)}});
 app.post('/api/admin/ban',auth,adminOnly,async(req,res,next)=>{try{const id=+req.body.id;if(id===req.user.id)return bad(res,400,'You can\'t ban yourself.');
   await sql(`update users set banned=$2 where id=$1`,[id,!!req.body.banned]);if(req.body.banned)await sql(`delete from sessions where user_id=$1`,[id]);
   await sql(`insert into audit(admin_id,action,detail) values($1,'ban',$2)`,[req.user.id,JSON.stringify({id,banned:!!req.body.banned})]);res.json({ok:true})}catch(e){next(e)}});
