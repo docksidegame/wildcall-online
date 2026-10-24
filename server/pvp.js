@@ -59,6 +59,10 @@ function matchmake(){
   for(let i=0;i<queue.length;i++){const a=queue[i];const waitA=(Date.now()-a.since)/1000;
     for(let j=i+1;j<queue.length;j++){const b=queue[j];if(a.stake!==b.stake)continue;const wait=Math.max(waitA,(Date.now()-b.since)/1000);
       if(Math.abs(a.rating-b.rating)<=Math.min(800,100+wait*10)){queue.splice(j,1);queue.splice(i,1);startMatch(a,b).catch(e=>console.error('[start]',e));i--;break}}}
+  // nobody around: after botSecs, play an AI rival instead (never for stakes)
+  const botSecs=+process.env.PVP_BOT_SECS||getCfg().pvp.botSecs;
+  if(botSecs>0)for(let i=queue.length-1;i>=0;i--){const a=queue[i];if(!a.stake&&(Date.now()-a.since)/1000>=botSecs){queue.splice(i,1);
+    const bot=rules().botFor(a.rating);startMatch(a,{bot:true,uid:null,name:bot.name,title:bot.title,rating:a.rating,games:99,deck:bot.deck,stake:0,sig:bot.sig}).catch(e=>console.error('[bot]',e))}}
 }
 async function startMatch(a,b){
   if(a.stake){const take=q=>lockUser(q.uid,async()=>{const u=await loadUser(q.uid);if(!u||u.save.coins<q.stake)return false;u.save.coins-=q.stake;
@@ -67,8 +71,8 @@ async function startMatch(a,b){
     if(!await take(a)){sendU(a.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});b.since=Date.now();queue.push(b);return}
     if(!await take(b)){await refund(a);sendU(b.uid,{t:'unqueued',msg:'Not enough coins for that stake.'});a.since=Date.now();queue.push(a);return}}
   const id=crypto.randomBytes(8).toString('hex');const realm=makeRealm();const S=realm.WCS;
-  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,away:null})),stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
-  matches.set(id,M);M.pl.forEach(p=>userMatch.set(p.uid,id));
+  const M={id,S,pl:[a,b].map(q=>({uid:q.uid,name:q.name,rating:q.rating,games:q.games,sig:q.sig,bot:!!q.bot,title:q.title,away:null})),bot:!!b.bot,stake:a.stake,prompts:new Map(),chain:Promise.resolve(),fx:[[],[]],pushT:null,turnT:null,deadline:0,ended:false,started:Date.now()};
+  matches.set(id,M);M.pl.forEach(p=>{if(p.uid!=null)userMatch.set(p.uid,id)});
   const cfg=getCfg();
   const NET={server:true,
     dirty(){M.push()},
@@ -83,11 +87,11 @@ async function startMatch(a,b){
   M.pushNow=()=>{if(M.pushT){clearImmediate(M.pushT);M.pushT=null}const D=S.D;if(!D)return;for(let pi=0;pi<2;pi++){const fx=M.fx[pi];M.fx[pi]=[];
       sendU(M.pl[pi].uid,{t:'state',view:S.netView(pi),fx,ms:M.deadline?Math.max(0,M.deadline-Date.now()):null,opp:oppInfo(M,pi)})}};
   M.push=()=>{if(M.pushT||M.ended)return;M.pushT=setImmediate(M.pushNow)};
-  S.setNet(NET);S.setFast(true);
+  S.setNet(NET);S.setFast(!M.bot); // bot matches keep the AI's natural pacing
   for(let pi=0;pi<2;pi++)sendU(M.pl[pi].uid,{t:'match',id,opp:oppInfo(M,pi),stake:M.stake});
-  S.startNetDuel([a.deck,b.deck],[a.name,b.name]);
+  S.startNetDuel([a.deck,b.deck],[a.name,b.name],[false,!!b.bot]);
 }
-const oppInfo=(M,pi)=>{const o=M.pl[1-pi];return {name:o.name,rating:o.rating,sig:o.sig}};
+const oppInfo=(M,pi)=>{const o=M.pl[1-pi];return {name:o.name,rating:o.rating,sig:o.sig,bot:o.bot,title:o.title}};
 async function refund(q){await lockUser(q.uid,async()=>{const u=await loadUser(q.uid);u.save.coins+=q.stake;await saveUser(u.id,u.save)})}
 function timeoutTurn(M,pi){if(M.ended)return;const D=M.S.D;if(!D||D.over||D.turn!==pi)return;
   for(const p of [...M.prompts.values()])if(p.pi===pi)p.finish(p.opts[0].val);
@@ -98,6 +102,7 @@ function dropped(M,uid){const pi=M.pl.findIndex(p=>p.uid===uid);if(pi<0||M.ended
   M.pl[pi].away=setTimeout(()=>{if(M.ended)return;M.chain=M.chain.then(()=>{if(!M.ended){M.reason=`${M.pl[pi].name} disconnected.`;return M.S.netAct(pi,'forfeit')}})},GRACE_SECS*1000)}
 async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.turnT);for(const p of [...M.prompts.values()])p.finish(p.opts[0].val);
   const cfg=getCfg();const W=M.pl[w],L=M.pl[1-w];
+  if(M.bot)return finishBot(M,w);
   const K=p=>p.games<10?40:32;const ea=1/(1+Math.pow(10,(L.rating-W.rating)/400));
   const wAfter=Math.round(W.rating+K(W)*(1-ea)),lAfter=Math.max(100,Math.round(L.rating+K(L)*(0-(1-ea))));
   const out={};
@@ -117,3 +122,13 @@ async function finish(M,w,reason){if(M.ended)return;M.ended=true;clearTimeout(M.
     userMatch.delete(p.uid);clearTimeout(p.away)}
   setTimeout(()=>matches.delete(M.id),5000);
 }
+
+// bot match: only the human is rewarded; rating and ranked record don't change
+async function finishBot(M,w){const cfg=getCfg();const hi=M.pl.findIndex(p=>!p.bot);const H=M.pl[hi],B=M.pl[1-hi];const won=w===hi;
+  const o=await lockUser(H.uid,async()=>{const u=await loadUser(H.uid);let save=u.save;const coins=won?(cfg.pvp.botWin??25):(cfg.pvp.botLoss??5);
+    save.coins+=coins;save=withSave(save,cfg,S=>S.acts.applyPvpResult(won,true)).save;await saveUser(u.id,save);return {save,coins,user:publicUser(await loadUser(u.id))}});
+  const D=M.S.D;
+  await sql(`insert into matches(p1,p2,winner,r1_before,r2_before,r1_after,r2_after,stake,turns,reason) values($1,null,$2,$3,$3,$3,$3,0,$4,$5)`,[H.uid,won?H.uid:null,H.rating,D?D.turnNo:0,'bot:'+B.name]);
+  M.pushNow();
+  sendU(H.uid,{t:'over',won,bot:true,oppName:B.name+' (bot)',ratingBefore:H.rating,ratingAfter:H.rating,coins:o.coins,packs:0,stake:0,save:o.save,user:o.user,reason:M.reason||null});
+  userMatch.delete(H.uid);clearTimeout(H.away);setTimeout(()=>matches.delete(M.id),5000)}

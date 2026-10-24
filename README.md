@@ -34,10 +34,12 @@ server/pvp.js              WebSockets: matchmaking queue, server-run ranked duel
 server/game.js             Loads the game's own code into small Node "realms" so the server runs the real rules
 server/db.js               Postgres (DATABASE_URL) or built-in PGlite for local dev
 server/shared.js           Config, per-player save locking, helpers
-test/                      api.mjs (31 API checks), e2e.py (two browsers, full ranked match), timeout.mjs, story.py
+test/                      api.mjs (31 API checks), e2e.py (two browsers, full ranked match), bot.py, timeout.mjs, story.py
 ```
 
 **The server is in charge of everything with value.** Coins, packs, the collection and story progress live in the database. When a player buys, opens a pack, claims a Bounty, buys from the Trail Market or sells extras, the browser asks the server, and the server runs the same game functions on its own copy of the save. Editing coins in the browser does nothing.
+
+**Bot fallback.** If nobody else is in the queue after 30 seconds, the player is matched with an AI story rival picked to suit their rating. Bot matches don't change rating or the ranked win/loss record, and pay less: 25 coins for a win and 5 for a loss, with no daily bonus. Stakes matches never use bots. The wait time and the rewards are in the admin panel, and setting the wait to 0 turns bots off.
 
 **Ranked duels run on the server.** Each match gets its own copy of the duel engine. Players send moves, the server checks and applies them, and each player only sees their own hand. It also handles turn timers, auto-picks a choice when one times out, and gives a 45-second reconnect window before a forfeit.
 
@@ -68,6 +70,7 @@ node test/api.mjs        # accounts, economy, anti-cheat, admin, stakes settings
 node test/timeout.mjs    # idle turns time out; a disconnected player forfeits
 python3 test/e2e.py      # needs Playwright: two players, shop, admin sale, a full staked ranked match
 python3 test/story.py    # online story duel rewards
+python3 test/bot.py      # solo player gets a bot after the wait and plays it to the end
 ```
 
 ## Not built yet

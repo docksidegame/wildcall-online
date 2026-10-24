@@ -100,4 +100,5 @@ async def main():
     finally:
         srv.terminate();time.sleep(0.5)
         print('--- server log tail ---');print(open('/tmp/wco-e2e.log').read()[-1500:])
-asyncio.run(main())
+if __name__=='__main__':
+    asyncio.run(main())

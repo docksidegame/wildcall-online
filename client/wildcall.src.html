@@ -1539,7 +1539,7 @@ function renderBounties(){bountyPeriods();
 }
 function claimBounty(id){const b=BOUNTIES.find(x=>x.id===id);if(!b||!bountyReady(b))return;if(b.per==='once')SAVE.claimed.push(id);else SAVE.bp[b.per].claimed.push(id);
  SAVE.coins+=b.coins||0;SAVE.packs+=b.packs||0;persist();render();toast(`${b.n}: ${rewardTxt(b)}!`)}
-function applyPvpResult(won){bountyPeriods();const st=SAVE.stats;st.pvpGames=(st.pvpGames||0)+1;st.duels=(st.duels||0)+1;if(won){st.wins++;st.pvpWins=(st.pvpWins||0)+1}return true}
+function applyPvpResult(won,bot){bountyPeriods();const st=SAVE.stats;st.pvpGames=(st.pvpGames||0)+1;st.duels=(st.duels||0)+1;if(won){st.wins++;if(!bot)st.pvpWins=(st.pvpWins||0)+1}return true}
 function beginDuel(i){const r=RIVALS[i];if(!rivalOpen(i))return;const keys=[];
  if(!isBeaten(r.id)){if(RIVALS.findIndex(x=>x.ch===r.ch)===i)keys.push(`ch${r.ch}:intro`);keys.push(`${r.id}:pre`)}
  playScenes(keys,()=>startDuel(i))}
@@ -1598,7 +1598,7 @@ function onNet(m){
  if(m.t==='err'){toast(m.msg);if(D&&D.net){D.busy=D.turn!==0;render()}return}
  if(m.t==='match'){RK.queued=false;NETMATCH=m;netPatch(true);closeModal();return}
  if(m.t==='state'){if(!NETMATCH)return;netPatch(true);const prev=D&&D.net?D:null;D=m.view;D.sel=prev&&prev.sel!=null&&D.p[0].hand.some(h=>h.uid===prev.sel)?prev.sel:null;D.snipe=prev?prev.snipe:null;
-  const o=NETMATCH.opp||{};D.oppInfo=`Rating ${o.rating||'?'}${NETMATCH.stake?` · Stakes ${NETMATCH.stake}`:''}`;D.oppSig=o.sig||'zapkit';D.deadline=m.ms!=null?Date.now()+m.ms:null;
+  const o=NETMATCH.opp||{};D.oppInfo=o.bot?`Bot · ${o.title||'practice'}`:`Rating ${o.rating||'?'}${NETMATCH.stake?` · Stakes ${NETMATCH.stake}`:''}`;D.oppSig=o.sig||'zapkit';D.deadline=m.ms!=null?Date.now()+m.ms:null;
   LOG=m.view.log||[];FXQ=(m.fx||[]).slice();if(UI.screen!=='duel'){UI.screen='duel'}render();flushFx();return}
  if(m.t==='prompt'){if(NETPROMPT)return;NETPROMPT=m.id;promptChoice(m.title,m.sub,m.opts).then(val=>{wsSend({t:'choice',id:m.id,val});NETPROMPT=null});return}
  if(m.t==='promptgone'){if(NETPROMPT===m.id){NETPROMPT=null;CHOICE=null;closeModal()}return}
@@ -1618,7 +1618,7 @@ function renderRanked(){if(!RK.board){RK.board=[];loadRanked()}const me=RK.me||{
     ${st.enabled?(canStake?`<label class="rk-row"><span class="eyebrow">Stakes</span><select id="rkstake" class="chip" style="padding:8px 12px">${stakes.map(v=>`<option value="${v}" ${v===RK.stake?'selected':''} ${v>SAVE.coins?'disabled':''}>${v?v+' coins each · winner takes '+(v*2):'No stakes'}</option>`).join('')}</select></label>
      <span class="muted" style="font-size:12px">Optional. Both players put up the same coins and the winner takes the pot. Coins have no cash value. ${me.stakesLeft!=null?`${me.stakesLeft} staked matches left today.`:''}</span>`
      :`<span class="muted" style="font-size:12px">${me.stakesReason||'Stakes matches are off for your account.'} <button class="btn ghost sm" data-act="rkstakeset">Settings</button></span>`):''}
-    ${RK.queued?`<div class="row"><span class="chip daily">Searching for an opponent · <b id="qtime">0s</b></span><button class="btn ghost" data-act="rkcancel">Cancel</button></div>`
+    ${RK.queued?`<div class="row"><span class="chip daily">Searching for an opponent · <b id="qtime">0s</b></span><button class="btn ghost" data-act="rkcancel">Cancel</button></div>${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)!==0&&!RK.stake?`<span class="muted" style="font-size:12px">No one around? After ${(SHOPCFG.pvp&&SHOPCFG.pvp.botSecs)||30}s you'll play a bot instead (no rating change, smaller rewards).</span>`:''}`
      :`<button class="btn gold" data-act="rkqueue" ${legal.length?'':'disabled'}>Find a match</button>`}
    </div></div>
   <div class="rk-cols"><div class="panel"><h3>Leaderboard</h3><div class="rk-table">${(RK.board||[]).map((r,i)=>`<div class="rk-tr${r.username===ACCOUNT.username?' me':''}"><span>${i+1}</span><b>${esc(r.username)}</b><span>${r.rating}</span><span class="muted">${r.wins}-${r.losses}</span></div>`).join('')||'<p class="muted">No ranked games yet. Be the first.</p>'}</div></div>
@@ -1636,7 +1636,7 @@ function renderPvpResult(){const m=UI.pvp||{};const won=m.won;
  main.innerHTML=`<div class="title"><div class="eyebrow" style="color:${won?'var(--good)':'var(--heart)'}">${won?'Victory':'Defeat'}</div>
   <h1 style="font-size:clamp(34px,7vw,56px)">${won?`You beat ${esc(m.oppName||'your opponent')}!`:`${esc(m.oppName||'Your opponent')} wins`}</h1>
   <p class="tagline">${m.reason?esc(m.reason):''}</p>
-  <div class="row" style="justify-content:center"><span class="coins">Rating ${m.ratingBefore} → <b>${m.ratingAfter}</b> (${m.ratingAfter-m.ratingBefore>=0?'+':''}${m.ratingAfter-m.ratingBefore})</span><span class="coins">+${m.coins||0} coins${m.packs?` · +${m.packs} pack`:''}</span>${m.stake?`<span class="coins">Stakes ${won?'+':'−'}${m.stake}</span>`:''}</div>
+  <div class="row" style="justify-content:center">${m.bot?'<span class="coins">Bot match · rating unchanged</span>':`<span class="coins">Rating ${m.ratingBefore} → <b>${m.ratingAfter}</b> (${m.ratingAfter-m.ratingBefore>=0?'+':''}${m.ratingAfter-m.ratingBefore})</span>`}<span class="coins">+${m.coins||0} coins${m.packs?` · +${m.packs} pack`:''}</span>${m.stake?`<span class="coins">Stakes ${won?'+':'−'}${m.stake}</span>`:''}</div>
   <div class="row" style="justify-content:center"><button class="btn gold" data-act="ranked">Play again</button><button class="btn ghost" data-act="home">Home</button></div></div>`}
 
 /* ---- admin ---- */
@@ -1652,7 +1652,7 @@ function renderAdmin(){if(!ADM.cfg){main.innerHTML=`<div class="screen"><div cla
   <div class="panel"><h3>What's for sale</h3><div class="agrid">${SHOP_ITEMS.map(it=>tog(it.id,it.n)).join('')}${tog('themes','Theme decks')}${THEMES.map(t=>tog('theme:'+t.id,'· '+t.n)).join('')}${tog('market','Trail Market')}${tog('sell','Trade in extras')}</div>
    <label class="rk-row" style="margin-top:8px"><span class="eyebrow">Trail Market featured stock (card ids, comma separated; blank = daily random)</span><input id="amkt" class="atext" value="${esc((mk.stock||[]).join(', '))}" placeholder="e.g. pyrolynx, alder, zyrake"></label><span class="muted" id="amktnames" style="font-size:12px"></span></div>
   <div class="panel"><h3>News banner</h3><input id="abanner" class="atext" maxlength="200" value="${esc(c.banner||'')}" placeholder="Shown on the title screen and in the shop"></div>
-  <div class="panel"><h3>Ranked rewards and timers</h3><div class="agrid"><label>Win coins ${num('pvp.win',pvp.win,60)}</label><label>Loss coins ${num('pvp.loss',pvp.loss,15)}</label><label>Daily first win coins ${num('pvp.dailyCoins',pvp.dailyCoins,100)}</label><label>Turn seconds ${num('pvp.turnSecs',pvp.turnSecs,75)}</label><label>AI duel coin cap / day ${num('caps.aiCoins',caps.aiCoins,3000)}</label><label>AI duel pack cap / day ${num('caps.aiPacks',caps.aiPacks,20)}</label></div></div>
+  <div class="panel"><h3>Ranked rewards and timers</h3><div class="agrid"><label>Win coins ${num('pvp.win',pvp.win,60)}</label><label>Loss coins ${num('pvp.loss',pvp.loss,15)}</label><label>Daily first win coins ${num('pvp.dailyCoins',pvp.dailyCoins,100)}</label><label>Turn seconds ${num('pvp.turnSecs',pvp.turnSecs,75)}</label><label>Bot after (s, 0 = off) ${num('pvp.botSecs',pvp.botSecs,30)}</label><label>Bot win coins ${num('pvp.botWin',pvp.botWin,25)}</label><label>Bot loss coins ${num('pvp.botLoss',pvp.botLoss,5)}</label><label>AI duel coin cap / day ${num('caps.aiCoins',caps.aiCoins,3000)}</label><label>AI duel pack cap / day ${num('caps.aiPacks',caps.aiPacks,20)}</label></div></div>
   <div class="panel"><h3>Stakes (coin wagers)</h3><label class="chk"><input type="checkbox" id="astk" ${st.enabled?'checked':''}> Stakes matches enabled</label>
    <div class="agrid"><label>Max stake ${num('stakes.max',st.max,500)}</label><label>Staked matches per player per day ${num('stakes.daily',st.daily,5)}</label></div>
    <label class="rk-row"><span class="eyebrow">Blocked countries (ISO codes, comma separated)</span><input id="ablock" class="atext" value="${esc((st.blocked||['BE','NL','CN']).join(', '))}"></label></div>
@@ -1986,8 +1986,8 @@ function nextNeed(u){const ms=C[u.id].moves.filter(m=>!moveReady(u,m));if(!ms.le
 
 
 /* ===================== networked duels (server realm) ===================== */
-function startNetDuel(decks,names){
- D={net:true,ri:0,proto:true,kos:{},p:[mkPlayer(names[0],decks[0],false,HEART),mkPlayer(names[1],decks[1],false,HEART)],turn:0,turnNo:0,sel:null,snipe:null,busy:true,over:false,first:Math.random()<.5?0:1};
+function startNetDuel(decks,names,ai){ai=ai||[];
+ D={net:true,ri:0,proto:true,kos:{},p:[mkPlayer(names[0],decks[0],!!ai[0],HEART),mkPlayer(names[1],decks[1],!!ai[1],HEART)],turn:0,turnNo:0,sel:null,snipe:null,busy:true,over:false,first:Math.random()<.5?0:1};
  LOG=[];D.p.forEach(p=>{openingHand(p);for(let i=0;i<PRIZES;i++)if(p.deck.length)p.prizes.push(p.deck.pop())});
  log(`${D.p[D.first].name} goes first.`);render();
  (async()=>{await Promise.all([mulligan(0),mulligan(1)]);await Promise.all([setupActive(0),setupActive(1)]);render();beginTurn(D.first)})();
@@ -2013,6 +2013,7 @@ function netView(pi){const mp=x=>x===pi?0:1;const cp=u=>u?JSON.parse(JSON.string
   o.deck=mine?p.deck.slice().sort():p.deck.map(()=>'spark');o.hand=mine?p.hand.map(h=>({...h})):p.hand.map((h,i)=>({id:'spark',uid:-1-i}));o.prizes=p.prizes.map(()=>'spark');return o};
  return {net:true,p:[P(pi,true),P(1-pi,false)],turn:mp(D.turn),turnNo:D.turnNo,first:mp(D.first),busy:D.busy||D.turn!==pi,over:D.over,winner:D.over?mp(D.winner):null,log:LOG.slice(0,6),kos:{},ri:0,proto:true}}
 function netAutoPick(opts){return opts[0].val}
+function botFor(rating){const i=Math.max(2,Math.min(RIVALS.length-1,Math.round((rating-850)/15)));const r=RIVALS[i];return {name:r.n,title:r.t,sig:r.sig,deck:rivalDeck60(r).slice(),ri:i}}
 
 /* ===================== AI ===================== */
 function unitValue(u){return C[u.id].stage*3+1+u.sparks+left(u)/4+(C[u.id].r==='r'||C[u.id].r==='h'?2:0)}
@@ -2642,7 +2643,7 @@ document.addEventListener('keydown',e=>{
 addEventListener('resize',()=>{if(UI.screen==='duel')layoutHand()});
 
 if(MIGRATED)setTimeout(()=>toast('Decks are now 60 cards. Yours were expanded with energy and Lands, and any extra copies were added to your collection.'),600);
-window.WCS={setSave:x=>{SAVE=x;if(SAVE){ensureSave();ensureShop()}},getSave:()=>SAVE,setCfg:c=>{SHOPCFG=c||{}},acts:{applyPvpResult,buyItem,buyTheme,buySingle,sellExtras,claimBounty,takePack:k=>{ensureShop();const r=takePack(k);persist();return r},takeAll,pickStarter,applyDuelResult},deckProblems,isExtra,limitOf,C,ORDER,RIVALS,SCENES,rivalOpen,today,hasFinish,finList,BOUNTIES,startNetDuel,netAct,netView,setNet:n=>{NET=n},get D(){return D},setFast:f=>{FAST=f;SIM=f},aiTurnFor:async pi=>{await aiTurn(pi)},endTurn:()=>endTurn()};
+window.WCS={botFor,setSave:x=>{SAVE=x;if(SAVE){ensureSave();ensureShop()}},getSave:()=>SAVE,setCfg:c=>{SHOPCFG=c||{}},acts:{applyPvpResult,buyItem,buyTheme,buySingle,sellExtras,claimBounty,takePack:k=>{ensureShop();const r=takePack(k);persist();return r},takeAll,pickStarter,applyDuelResult},deckProblems,isExtra,limitOf,C,ORDER,RIVALS,SCENES,rivalOpen,today,hasFinish,finList,BOUNTIES,startNetDuel,netAct,netView,setNet:n=>{NET=n},get D(){return D},setFast:f=>{FAST=f;SIM=f},aiTurnFor:async pi=>{await aiTurn(pi)},endTurn:()=>endTurn()};
 window.WC={fitTcg,cardHTML,aceCore,get SAVE(){return SAVE},endDuel:w=>endDuel(w),CHAPTERS,BOUNTIES,statVal,rivalDeck60,analyzeDeck,buildDeck,simDuels,to60,rebalanceEnergy,ENERGY,get UI(){return UI},get D(){return D},PROTO,landOptions,activateLand,playLand,C,RIVALS,STARTERS,expand,deckProblems,setFast:f=>{FAST=f},
  testDuel:async(a,b,ri)=>{FAST=true;SIM=true;D=null;UI.test=null;startDuel(ri||0,[a,b]);D.test=true;D.p[0].ai=true;D.p[0].name='Bot A';D.p[1].name='Bot B';
   for(let i=0;i<300000&&UI.test==null;i++)await fastTick();for(let i=0;i<200;i++)await fastTick();SIM=false;return {winner:UI.test,turns:D.turnNo,hearts:D.p.map(p=>p.heart)}},

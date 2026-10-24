@@ -1,7 +1,7 @@
 import {sql} from './db.js';
 export const DEFAULT_CFG={prices:{},sale:{all:0,items:{}},disabled:[],market:{prices:{},stock:[]},banner:'',
   stakes:{enabled:false,max:500,daily:5,blocked:['BE','NL','CN'],options:[50,100,250,500]},
-  pvp:{win:60,loss:15,dailyCoins:100,turnSecs:75},caps:{aiCoins:3000,aiPacks:20}};
+  pvp:{win:60,loss:15,dailyCoins:100,turnSecs:75,botSecs:30,botWin:25,botLoss:5},caps:{aiCoins:3000,aiPacks:20}};
 export let CFG=structuredClone(DEFAULT_CFG);
 export const getCfg=()=>CFG;
 export const merge=(a,b)=>{const o={...a};for(const k in b){o[k]=b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])&&a[k]&&typeof a[k]==='object'?merge(a[k],b[k]):b[k]}return o};

@@ -121,7 +121,7 @@ app.get('/api/leaderboard',async(req,res,next)=>{try{res.json({rows:await sql(`s
 app.get('/api/ranked/me',auth,async(req,res,next)=>{try{const u=req.user;
   const rank=u.wins+u.losses>0?(await sql(`select count(*)::int+1 as r from users where banned=false and wins+losses>0 and rating>$1`,[u.rating]))[0].r:null;
   const h=await sql(`select m.*,a.username as n1,b.username as n2 from matches m left join users a on a.id=m.p1 left join users b on b.id=m.p2 where m.p1=$1 or m.p2=$1 order by m.id desc limit 10`,[u.id]);
-  const history=h.map(m=>{const me1=m.p1===u.id;return {won:m.winner===u.id,opp:me1?m.n2:m.n1,delta:me1?m.r1_after-m.r1_before:m.r2_after-m.r2_before,stake:m.stake}});
+  const history=h.map(m=>{const me1=m.p1===u.id;return {won:m.winner===u.id,opp:(me1?m.n2:m.n1)||(m.reason&&m.reason.startsWith('bot:')?m.reason.slice(4)+' (bot)':'?'),delta:me1?m.r1_after-m.r1_before:m.r2_after-m.r2_before,stake:m.stake}});
   res.json({rank,history,...stakeStatus(u)})}catch(e){next(e)}});
 app.post('/api/settings',auth,async(req,res,next)=>{try{const b=req.body||{};const s={...(req.user.settings||{})};
   if(typeof b.country==='string'&&/^([A-Z]{2})?$/.test(b.country))s.country=b.country;if(typeof b.stakesOptIn==='boolean')s.stakesOptIn=b.stakesOptIn;
@@ -136,7 +136,7 @@ app.put('/api/admin/config',auth,adminOnly,async(req,res,next)=>{try{const b=req
     banner:String(b.banner||'').slice(0,200),
     stakes:{enabled:!!(b.stakes&&b.stakes.enabled),max:num(b.stakes&&b.stakes.max,100000)??500,daily:num(b.stakes&&b.stakes.daily,100)??5,
       blocked:Array.isArray(b.stakes&&b.stakes.blocked)?b.stakes.blocked.filter(x=>/^[A-Z]{2}$/.test(x)):[],options:[50,100,250,500,1000].filter(v=>v<=(num(b.stakes&&b.stakes.max,100000)??500))},
-    pvp:{win:num(b.pvp&&b.pvp.win,5000)??60,loss:num(b.pvp&&b.pvp.loss,5000)??15,dailyCoins:num(b.pvp&&b.pvp.dailyCoins,10000)??100,turnSecs:Math.max(20,num(b.pvp&&b.pvp.turnSecs,600)??75)},
+    pvp:{win:num(b.pvp&&b.pvp.win,5000)??60,loss:num(b.pvp&&b.pvp.loss,5000)??15,dailyCoins:num(b.pvp&&b.pvp.dailyCoins,10000)??100,turnSecs:Math.max(20,num(b.pvp&&b.pvp.turnSecs,600)??75),botSecs:num(b.pvp&&b.pvp.botSecs,600)??30,botWin:num(b.pvp&&b.pvp.botWin,5000)??25,botLoss:num(b.pvp&&b.pvp.botLoss,5000)??5},
     caps:{aiCoins:num(b.caps&&b.caps.aiCoins,1e6)??3000,aiPacks:num(b.caps&&b.caps.aiPacks,1e4)??20}};
   for(const [k,v] of Object.entries((b.prices)||{})){const n=num(v,1e6);if(n!=null)clean.prices[k]=n}
   for(const [k,v] of Object.entries((b.sale&&b.sale.items)||{})){const n=num(v,90);if(n)clean.sale.items[k]=n}
