@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import {fileURLToPath} from 'url';
-import {initDb,sql} from './db.js';
+import {initDb,sql,DB_KIND} from './db.js';
 import {loadGame,econ,withSave,rules} from './game.js';
 import {initPvp,pvpOnline} from './pvp.js';
 import {getCfg,setCfg,loadCfg,DEFAULT_CFG,lockUser,loadUser,saveUser,today,publicUser,parseCookies,userFromCookie,stakeStatus,merge,recordDecks} from './shared.js';
@@ -220,7 +220,7 @@ app.get('/api/admin/stats',auth,adminOnly,async(req,res,next)=>{try{
   const rivals=await sql(`select rival,source,count(*)::int as games,sum(case when won then 1 else 0 end)::int as wins,avg(turns)::float as turns from match_decks where ${where} and bot=false and rival is not null group by rival,source order by games desc`,p);
   const bots=await sql(`select rival,count(*)::int as games,sum(case when won then 0 else 1 end)::int as wins from match_decks where ${where} and bot=true group by rival order by games desc`,p);
   res.json({days,src,overview,first,storyFirst,totalDecks,cards,rivals,bots})}catch(e){next(e)}});
-app.get('/api/health',(req,res)=>res.json({ok:true,online:pvpOnline()}));
+app.get('/api/health',(req,res)=>res.json({ok:true,db:DB_KIND,online:pvpOnline()}));
 // ---------- static game ----------
 app.use('/art',express.static(path.join(ROOT,'public/art'),{maxAge:'7d',immutable:true}));
 app.get(['/','/index.html'],(req,res)=>{res.setHeader('Cache-Control','no-cache');res.sendFile(path.join(ROOT,'public/index.html'))});

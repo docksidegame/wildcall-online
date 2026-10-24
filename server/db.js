@@ -1,17 +1,18 @@
 // Postgres via DATABASE_URL in production; embedded PGlite (Postgres in WASM) for local dev.
 let q=null;
+export let DB_KIND='none';
 export async function initDb(){
   if(process.env.DATABASE_URL){
     const pg=(await import('pg')).default;
     const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.PGSSL==='disable'?false:{rejectUnauthorized:false},max:10});
     q=(text,params)=>pool.query(text,params).then(r=>r.rows);
-    console.log('[db] using Postgres');
+    DB_KIND='postgres';console.log('[db] using Postgres');
   }else{
     const {PGlite}=await import('@electric-sql/pglite');
     const dir=process.env.PGLITE_DIR||'./data/pglite';
     const db=new PGlite(dir);await db.waitReady;
     q=(text,params)=>db.query(text,params).then(r=>r.rows);
-    console.log('[db] using embedded PGlite at',dir,'(set DATABASE_URL for production)');
+    DB_KIND='pglite';console.log('[db] using embedded PGlite at',dir,'(set DATABASE_URL for production)');
   }
   await migrate();
 }
